@@ -1,0 +1,17 @@
+# results and logs
+models/
+logs/
+results/
+
+# model checkpoints
+*.ckpt
+*.pth
+*.pt
+
+# cache Python
+__pycache__/
+*.pyc
+
+# Hydra
+multirun/
+outputs/
