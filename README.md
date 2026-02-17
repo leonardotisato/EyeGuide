@@ -1,14 +1,7 @@
 # Knowledge Distillation for Fundus Image Classification
 
-This project implements **knowledge distillation** techniques for training student models to classify fundus (retinal) images. Knowledge distillation is a model compression technique where a smaller student model learns from a larger, pre-trained teacher model to improve its performance while maintaining efficiency.
-
+This project proposes a **knowledge distillation** framework for improving the baseline performance of a CNN in characterizing eye cancer, by guiding it with the greater knowledge of a model that has been trained on more meaningfull and well processed data.
 ## Project Overview
-
-The knowledge distillation folder contains a complete pipeline for:
-- Training teacher models (VGG16, ResNet18, ViT, Swin) on fundus image classification tasks
-- Training student models using knowledge distillation with combined loss functions
-- Evaluating the effectiveness of zoom-level augmentation strategies
-- Analyzing confidence intervals and statistical significance of results
 
 ## Directory Structure
 
@@ -17,51 +10,23 @@ knowledge_distillation/
 ├── src/
 │   ├── main.py                      # Main training script with knowledge distillation pipeline
 │   ├── zoom_experiment.py           # Experiment script for evaluating zoom/dilation levels
-│   ├── check_overlaps.py            # Statistical analysis of confidence intervals
 │   └── utils/
 │       ├── dataset.py               # Dataset classes (FundusClsDataset, FundusClsDatasetZoom, PairedFundusDataset)
 │       ├── model.py                 # Model architectures (ResNet18, VGG16, ViT, Swin classifiers)
 │       ├── training.py              # Training and testing functions
 │       ├── losses.py                # Knowledge distillation loss functions
-│       ├── transforms.py            # Image augmentation transforms
+│       ├── transforms.py            # Transforms
 │       ├── metrics.py               # Evaluation metrics
 │       ├── visualization.py         # Visualization and logging utilities
-│       ├── seed.py                  # Random seed management
+│       ├── seed.py                  # Random seed
 │       ├── generals.py              # General utility functions
-│       └── zoom_experiment.py       # Zoom level evaluation utilities
+│       └── zoom_experiment.py       # Zoom level evaluation
 ├── config/
 │   └── config.yaml                  # Hydra configuration file
 ├── models/                          # Directory for saved model checkpoints
-├── results/                         # Directory for results and metrics
-├── logs/                            # Directory for training logs
-├── outputs/                         # Directory for Hydra outputs
 ├── exec.sh                          # Docker execution script
-└── README.md                        # This file
+└── README.md                       
 ```
-
-## Key Features
-
-### 1. Knowledge Distillation Pipeline
-- **Teacher-Student Architecture**: Trains large teacher models to guide smaller student models
-- **Soft Targets**: Uses softmax distributions from teacher predictions as soft labels for student training
-- **Combined Loss**: Combines cross-entropy loss with knowledge distillation loss via weighted combination
-  - `loss = beta * KD_loss + (1 - beta) * CE_loss`
-
-### 2. Model Architectures Supported
-- **ResNet18**: Lightweight convolutional neural network
-- **VGG16**: Deeper CNN architecture
-- **ViT (Vision Transformer)**: Transformer-based image classification
-- **Swin Transformer**: Hierarchical vision transformer
-
-### 3. Data Augmentation Strategies
-- **Zoom/Dilation Augmentation**: Applies varying dilation percentages to focus on different regions of fundus images
-- **Paired Dataset**: Creates paired teacher-student samples for knowledge distillation
-- **Train-Val-Test Split**: Supports configurable data splits with stratified k-fold cross-validation
-
-### 4. Evaluation Metrics
-- Accuracy, Precision, Recall, F1-Score
-- Confidence intervals for statistical significance testing
-- Cross-validation performance analysis
 
 ## Configuration
 
@@ -131,16 +96,6 @@ python src/zoom_experiment.py
 
 This script performs k-fold cross-validation for different zoom levels and reports mean F1 scores.
 
-### Statistical Analysis
-
-To check for statistical significance of results:
-
-```bash
-python src/check_overlaps.py
-```
-
-This analyzes confidence intervals of different model variants.
-
 ## Key Scripts
 
 ### `src/main.py`
@@ -157,11 +112,6 @@ Evaluates the impact of different zoom/dilation levels on model performance:
 - Tests zoom levels: 0.0, 0.5, 1.0, and Original
 - Reports mean and standard deviation of F1 scores
 
-### `src/check_overlaps.py`
-Statistical analysis tool for confidence intervals:
-- Compares performance confidence intervals between student and distilled student models
-- Determines statistical significance of performance differences
-
 ## Utilities
 
 ### Dataset Classes
@@ -172,70 +122,6 @@ Statistical analysis tool for confidence intervals:
 ### Loss Functions
 - **KD Loss**: Knowledge distillation loss using soft targets
 - **Cross-Entropy Loss**: Standard classification loss
-
-### Model Utilities
-- Classifier wrappers for different architectures
-- Model initialization and checkpoint management
-
-## Dependencies
-
-Key Python packages:
-- `torch`: Deep learning framework
-- `torchvision`: Image utilities and pre-trained models
-- `hydra-core`: Configuration management
-- `pandas`: Data manipulation
-- `numpy`: Numerical computing
-- `scikit-learn`: Machine learning utilities
-- `albumentations`: Image augmentation library
-- `wandb`: Experiment tracking (optional)
-
-Install dependencies:
-```bash
-pip install torch torchvision hydra-core omegaconf pandas numpy scikit-learn albumentations
-```
-
-## Output Files
-
-After training, the following are generated:
-
-- **Models**: Saved in `models/` directory
-  - Teacher model checkpoint
-  - Student model checkpoint
-  - Best validation checkpoint
-
-- **Results**: Saved in `results/` directory
-  - Metrics CSV files (accuracy, precision, recall, F1)
-  - Performance plots and visualizations
-
-- **Logs**: Saved in `logs/` directory
-  - Training logs with loss curves
-  - Validation metrics per epoch
-
-- **Hydra Outputs**: Automatic output directory with configuration snapshots
-
-## Performance Metrics
-
-The project tracks and reports:
-- Per-epoch training and validation losses
-- Per-epoch accuracy, precision, recall, F1-score
-- Confidence intervals and statistical tests
-- Cross-validation performance statistics
-
-## Notes
-
-- The project uses stratified k-fold cross-validation for robust evaluation
-- Early stopping is implemented with configurable patience
-- All results are reproducible using the fixed random seed
-- The pipeline supports both CPU and GPU training (GPU recommended)
-
-## Related Directories
-
-This project is part of a larger PerspectiveStudy framework:
-- `../models/`: Core model implementations
-- `../datasets/`: Dataset utilities
-- `../configs/`: Global configuration templates
-- `../trainers/`: Training utilities and managers
-- `../RESULTS/`: Aggregated results from various experiments
 
 ---
 
