@@ -5,7 +5,7 @@ from torchvision import models
 
 class ResNet50Classifier(nn.Module):
     """
-    ResNet-50 classifier with configurable dropout and number of output classes.
+    ResNet-50 classifier.
 
     Args:
         nr_classes (int): number of output classes.
@@ -27,9 +27,7 @@ class ResNet50Classifier(nn.Module):
         self.fc = nn.Linear(in_features, nr_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through the backbone, dropout, and final classifier.
-        """
+       
         features = self.backbone(x)      # shape: [B, in_features]
         features = self.dropout(features)
         logits = self.fc(features)       # shape: [B, nr_classes]
@@ -45,7 +43,7 @@ class ResNet50Classifier(nn.Module):
 
 class ResNet18Classifier(nn.Module):
     """
-    ResNet-18 classifier with configurable dropout and number of output classes.
+    ResNet-18 classifier.
 
     Args:
         nr_classes (int): number of output classes.
@@ -67,19 +65,11 @@ class ResNet18Classifier(nn.Module):
         self.fc = nn.Linear(in_features, nr_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through the backbone, dropout, and final classifier.
-        """
+      
         features = self.backbone(x)      # shape: [B, in_features]
         features = self.dropout(features)
         logits = self.fc(features)       # shape: [B, nr_classes]
         return logits
-
-
-import torch
-import torch.nn as nn
-from torchvision import models
-
 
 # -------------------------
 # VGG16
