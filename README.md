@@ -20,7 +20,6 @@ knowledge_distillation/
 │       ├── visualization.py         # Visualization and logging utilities
 │       ├── seed.py                  # Random seed
 │       ├── generals.py              # General utility functions
-│       └── zoom_experiment.py       # Zoom level evaluation
 ├── config/
 │   └── config.yaml                  # Hydra configuration file
 ├── models/                          # Directory for saved model checkpoints
@@ -72,56 +71,6 @@ This will:
 2. Train a teacher model on the full dataset
 3. Train a student model using knowledge distillation from the teacher
 4. Save models, logs, and results to the specified directories
-
-### Docker Execution
-
-To run the training in a Docker container (GPU-enabled):
-
-```bash
-bash exec.sh
-```
-
-The `exec.sh` script will:
-- Mount necessary directories from the host
-- Install required dependencies (wandb, albumentations)
-- Run the main training script inside the container
-
-### Zoom Level Evaluation
-
-To evaluate different zoom/dilation levels:
-
-```bash
-python src/zoom_experiment.py
-```
-
-This script performs k-fold cross-validation for different zoom levels and reports mean F1 scores.
-
-## Key Scripts
-
-### `src/main.py`
-Main training script implementing the knowledge distillation pipeline:
-- Loads configurations using Hydra
-- Prepares datasets with optional zoom augmentation
-- Trains teacher and student models
-- Saves checkpoints and metrics
-- Logs results in CSV format
-
-### `src/zoom_experiment.py`
-Evaluates the impact of different zoom/dilation levels on model performance:
-- Performs k-fold stratified cross-validation
-- Tests zoom levels: 0.0, 0.5, 1.0, and Original
-- Reports mean and standard deviation of F1 scores
-
-## Utilities
-
-### Dataset Classes
-- **FundusClsDataset**: Standard fundus image classification dataset
-- **FundusClsDatasetZoom**: Dataset with zoom/dilation augmentation
-- **PairedFundusDataset**: Creates paired samples for teacher-student training
-
-### Loss Functions
-- **KD Loss**: Knowledge distillation loss using soft targets
-- **Cross-Entropy Loss**: Standard classification loss
 
 ---
 
