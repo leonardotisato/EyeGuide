@@ -1,8 +1,8 @@
 # config.yaml
 
 # Path
-base_dir: /home/virginia/PerspectiveStudy
-data_dir: /home/virginia/EyeCancerDetection
+base_dir: .
+data_dir: Data
 csv_file: fundus_data_final.csv
 
 # Directory 
@@ -10,7 +10,7 @@ hydra:
   run:
     dir: outputs/${now:%Y%m%d_%H%M%S}  
   job:
-    chdir: true  
+    chdir: false  
 
 results_dir: results_vgg16
 models_dir: models

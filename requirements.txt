@@ -2,6 +2,7 @@
 torch>=2.0.0
 torchvision>=0.15.0
 torchaudio>=2.0.0
+timm>=0.9.0
 
 # Configuration and Utilities
 hydra-core>=1.3.0
@@ -10,9 +11,10 @@ PyYAML>=6.0
 
 # Data Processing and Analysis
 pandas>=2.0.0
-numpy>=1.24.0
+numpy<2.0.0
 scikit-learn>=1.3.0
 scipy>=1.10.0
+seaborn>=0.12.0
 
 # Image Processing and Augmentation
 Pillow>=9.5.0
@@ -26,6 +28,7 @@ wandb>=0.15.0
 # Additional Utilities
 tqdm>=4.65.0
 pyyaml>=6.0
+seaborn
 
 # Development (Optional)
 # jupyter>=1.0.0

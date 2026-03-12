@@ -46,9 +46,9 @@ ce_w: 0.25                # Weight for cross-entropy
 # Data Augmentation
 dilation_percentage: 1.0   # Level of zoom/dilation augmentation
 
-# Paths
-base_dir: /home/virginia/PerspectiveStudy
-data_dir: /home/virginia/EyeCancerDetection
+# Path
+base_dir: .
+data_dir: Data
 csv_file: fundus_data_final.csv
 
 # Training Configuration
@@ -60,7 +60,9 @@ patience: 30              # Early stopping patience
 
 ## Usage
 
-### Basic Training with Knowledge Distillation
+### Option 1: Basic Local Training (Python)
+
+If you have a local GPU and dependencies installed, you can run directly from the root directory:
 
 ```bash
 python src/main.py
@@ -71,6 +73,27 @@ This will:
 2. Train a teacher model on the full dataset
 3. Train a student model using knowledge distillation from the teacher
 4. Save models, logs, and results to the specified directories
+
+### Option 2: Docker Execution
+
+If you prefer an isolated container environment ensuring all dependencies and CUDA drivers are perfectly aligned, you can use Docker.
+
+1. **Build the image (Only needed once)**
+   ```bash
+   docker build -t hpps_image .
+   ```
+
+2. **Run the training**
+   Use the provided `exec.sh` script. It automatically cleans up any previous runs, starts a new container named `hpps_gpu_container` in the background, and mounts your project directory so results are saved locally exactly as if you ran it natively.
+
+   ```bash
+   # Run the script (removes old containers and starts a new one)
+   bash exec.sh
+
+   # Check the training progress live
+   docker logs -f hpps_gpu_container
+   ```
+
 
 ---
 

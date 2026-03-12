@@ -1,30 +1,29 @@
 #!/bin/bash
-CONTAINER_NAME="vgg16_gpu1"
-IMAGE_NAME="virgi_heif_5"
-GPU_SPEC="device=1"
+CONTAINER_NAME="hpps_gpu_container"
+IMAGE_NAME="hpps_image"
+GPU_SPEC="all"
 # -------------------------------
 # Path mounting
 # -------------------------------
-HOST_PERSPECTIVE="/home/virginia/PerspectiveStudy"
-HOST_EYECANCER="/home/virginia/EyeCancerDetection"
+HOST_WORKING_DIR="$(pwd)"
 
-CONTAINER_PERSPECTIVE="/home/virginia/PerspectiveStudy"
-CONTAINER_EYECANCER="/home/virginia/EyeCancerDetection"
+CONTAINER_WORKING_DIR="/app"
 
-
-CMD="python3 -m pip install wandb 'albumentations[imgaug]' && \
-python3 /home/virginia/PerspectiveStudy/knowledge_distillation/src/main.py"
-
+CMD="python3 src/main.py"
 
 # -------------------------------
 # Launch the container
 # -------------------------------
+echo "Removing old container if it exists..."
+docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
+
+echo "Starting new container..."
 docker run -d \
   --gpus ${GPU_SPEC} \
+  --shm-size=8g \
   -e TORCH_HOME=/tmp/.cache/torch \
-  -v ${HOST_PERSPECTIVE}:${CONTAINER_PERSPECTIVE} \
-  -v ${HOST_EYECANCER}:${CONTAINER_EYECANCER} \
-  -w /home/virginia/PerspectiveStudy/knowledge_distillation \
+  -v "${HOST_WORKING_DIR}:${CONTAINER_WORKING_DIR}" \
+  -w "${CONTAINER_WORKING_DIR}" \
   --name ${CONTAINER_NAME} \
   ${IMAGE_NAME} \
   /bin/bash -c "${CMD}"

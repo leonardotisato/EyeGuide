@@ -24,6 +24,30 @@ from torchvision import transforms
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import StratifiedShuffleSplit, GroupShuffleSplit
 from omegaconf import DictConfig
+import time
+
+def safe_pil_read(path, retries=10, delay=1.0):
+    # WSL2 can drop file handles under heavy IO load, causing "Premature end of JPEG file"
+    for i in range(retries):
+        try:
+            img = Image.open(path).convert("RGB")
+            img.load()  # Force load to catch truncated files
+            return img
+        except Exception:
+            time.sleep(delay)
+    # Final attempt that will raise the actual error if it fails
+    img = Image.open(path).convert("RGB")
+    img.load()
+    return img
+
+def safe_cv2_read(path, flags=None, retries=10, delay=1.0):
+    # Retry loop for cv2.imread which returns None on silent WSL2 IO drops
+    for i in range(retries):
+        img = cv2.imread(path, flags) if flags is not None else cv2.imread(path)
+        if img is not None:
+            return img
+        time.sleep(delay)
+    return cv2.imread(path, flags) if flags is not None else cv2.imread(path)
 
 class FundusClsDataset(Dataset):
     def __init__(self, data_csv, train=True, transform=None):
@@ -46,8 +70,8 @@ class FundusClsDataset(Dataset):
         
         # Load image and mask using the paths from the CSV
         label = self.data_csv.iloc[idx]['label']  # Fetch the label (0: Healthy (considered background), 1: nevi, 2: UM, 3: CHRPE)
-        img_path = self.data_csv.iloc[idx]['image']
-        img = Image.open(img_path).convert("RGB")  # 3 channels
+        img_path = str(self.data_csv.iloc[idx]['image']).strip()
+        img = safe_pil_read(img_path)
         img = np.array(img) 
         
         # -1 otherwise cross entropy loss does not works
@@ -131,10 +155,10 @@ class BaseLesionZoomDataset(Dataset):
 
     def _load_image_and_mask(self, idx):
         row = self.data_csv.iloc[idx]
-        img_path = row['image']
-        mask_path = row['mask']
+        img_path = str(row['image']).strip()
+        mask_path = str(row['mask']).strip()
         label = row['label']
-        image = cv2.imread(str(img_path))
+        image = safe_cv2_read(img_path)
         if image is None:
             raise ValueError(f"Failed to load image: {img_path}")
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -142,7 +166,7 @@ class BaseLesionZoomDataset(Dataset):
             mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
             mask_original = mask.copy()
         else:
-            binary_mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            binary_mask = safe_cv2_read(mask_path, cv2.IMREAD_GRAYSCALE)
             if binary_mask is None:
                 raise ValueError(f"Failed to load mask: {mask_path}")
             mask_original = (binary_mask > 0).astype(np.uint8) * label

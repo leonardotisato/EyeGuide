@@ -138,55 +138,73 @@ def main(cfg: DictConfig):
     train_loader_teacher = DataLoader(
         train_dataset_teacher,
         batch_size=cfg.batch_size,
-        shuffle=True
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True
     )
 
     val_loader_teacher = DataLoader(
         val_dataset_teacher,
         batch_size=cfg.batch_size,
-        shuffle=False
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
     )
 
     train_loader_student = DataLoader(
         train_dataset_student,
         batch_size=cfg.batch_size,
-        shuffle=True
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True
     )
 
     val_loader_student = DataLoader(
         val_dataset_student,
         batch_size=cfg.batch_size,
-        shuffle=False
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
     )
 
     train_loader_kd = DataLoader(
         train_dataset_kd,
         batch_size=cfg.batch_size,
-        shuffle=True
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True
     )
 
     val_loader_kd = DataLoader(
         val_dataset_kd,
         batch_size=cfg.batch_size,
-        shuffle=False
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
     )
 
     test_loader_teacher = DataLoader(
         test_dataset_teacher,
         batch_size=cfg.batch_size,
-        shuffle=False
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
     )
 
     test_loader_student = DataLoader(
         test_dataset_student,
         batch_size=cfg.batch_size,
-        shuffle=False
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
     )
 
     test_loader_kd = DataLoader(
         test_dataset_kd,
         batch_size=cfg.batch_size,
-        shuffle=False
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
     )
     
 
@@ -335,6 +353,13 @@ def main(cfg: DictConfig):
         val_f1s=plots_skd["val_f1s"],
         results_dir=cfg.results_dir,
     )
+
+    # ------------------ SAVE MODELS ------------------
+    print("\n================ SAVING MODELS =================")
+    torch.save(teacher.state_dict(), os.path.join(cfg.models_dir, f"teacher_{exp_name}.pth"))
+    torch.save(student.state_dict(), os.path.join(cfg.models_dir, f"student_{exp_name}.pth"))
+    torch.save(student_kd.state_dict(), os.path.join(cfg.models_dir, f"student_kd_{exp_name}.pth"))
+    print(f"Models saved in: {cfg.models_dir}")
 
     # ------------------ SAVE METRICS ------------------
     summary_metrics = {
