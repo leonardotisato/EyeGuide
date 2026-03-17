@@ -30,6 +30,16 @@ tqdm>=4.65.0
 pyyaml>=6.0
 seaborn
 
+# Quantization
+brevitas>=0.10.0
+
+# ONNX export & numerical validation
+onnx>=1.14.0
+onnxruntime>=1.16.0
+onnxscript
+onnxoptimizer
+qonnx
+
 # Development (Optional)
 # jupyter>=1.0.0
 # tensorboard>=2.13.0

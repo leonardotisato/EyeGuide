@@ -24,7 +24,7 @@ knowledge_distillation/
 │   └── config.yaml                  # Hydra configuration file
 ├── models/                          # Directory for saved model checkpoints
 ├── exec.sh                          # Docker execution script
-└── README.md                       
+└── README.md
 ```
 
 ## Configuration
