@@ -1,0 +1,11 @@
+{
+  "qat_epochs": 4,
+  "best_val_f1": 86.5832,
+  "export_path": "models/student_kd_int8_qat.onnx",
+  "input_size": [
+    1,
+    3,
+    512,
+    512
+  ]
+}
