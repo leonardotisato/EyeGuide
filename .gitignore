@@ -18,3 +18,8 @@ outputs/
 
 Data/
 ignore/
+.claude/
+
+# FINN build outputs (large, regenerable)
+build_ultra96*/
+src/finn_build/verification/*.npy

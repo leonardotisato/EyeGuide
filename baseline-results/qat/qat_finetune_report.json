@@ -1,7 +1,7 @@
 {
   "qat_epochs": 4,
-  "best_val_f1": 86.5832,
-  "export_path": "models/student_kd_int8_qat.onnx",
+  "best_val_f1": 83.7107,
+  "checkpoint": "models/student_kd_resnet18_qat.pth",
   "input_size": [
     1,
     3,
