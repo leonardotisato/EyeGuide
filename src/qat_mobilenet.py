@@ -1,15 +1,15 @@
 """
-QAT fine-tuning: load KD weights, calibrate, train, evaluate, save checkpoint.
+QAT fine-tuning for MobileNetV1 8w8a: load FP32 KD weights, calibrate, train, evaluate, save.
 
-Export is handled separately by export_qat.py.
+Mirrors qat_resnet18.py exactly — plain CE loss, BN freeze at epoch 5, same LR/wd.
+Float (LOG_FP) quantizers with per-channel activation scaling on stem and PW convs.
 
 Run with:
-    python src/qat_finetune.py
+    bash run_qat_mobilenet.sh
 """
 
 import os
 import sys
-import glob
 import json
 import csv
 import warnings
@@ -30,33 +30,26 @@ from brevitas.graph.calibrate import calibration_mode
 
 sys.path.insert(0, os.path.dirname(__file__))
 from utils.seed import set_seeds
-from utils.quant_model import QuantResNet18, load_kd_weights
+from utils.quant_mobilenetv1 import QuantMobileNetV1, load_timm_weights, model_tag
 from utils.dataset import FundusClsDataset, prepare_dataframes
 from utils.transforms import test_transform_class, train_transform_class
 from utils.training import test
 from utils.generals import progress_bar
 
 
-# ─── QAT hyperparameters ────────────────────────────────────────────────────
-QAT_LR = 1e-5
-QAT_EPOCHS = 30
+WEIGHT_BITS = 8
+ACT_BITS = 8
+
+# ─── QAT hyperparameters (mirrors qat_resnet18.py) ──────────────────────────
+QAT_LR           = 1e-4
+QAT_EPOCHS       = 60
 QAT_WEIGHT_DECAY = 1e-4
-CALIB_BATCHES = 100
-BN_FREEZE_EPOCH = 5       # freeze BN running stats after this epoch
-PATIENCE = 10              # early stopping on val F1
-
-
-def find_latest_checkpoint(models_dir, pattern):
-    paths = glob.glob(os.path.join(models_dir, pattern))
-    if not paths:
-        raise FileNotFoundError(
-            f"No checkpoint found matching '{pattern}' in '{models_dir}'"
-        )
-    return max(paths, key=os.path.getmtime)
+CALIB_BATCHES    = 100
+BN_FREEZE_EPOCH  = 999
+PATIENCE         = 20
 
 
 def freeze_bn(model):
-    """Set all BatchNorm layers to eval mode (freeze running stats)."""
     for m in model.modules():
         if isinstance(m, (nn.BatchNorm2d, nn.BatchNorm1d)):
             m.eval()
@@ -151,35 +144,37 @@ def main(cfg: DictConfig) -> None:
     # ── Data ─────────────────────────────────────────────────────────────
     train_df, val_df, test_df = prepare_dataframes(cfg)
 
-    train_dataset = FundusClsDataset(train_df, train=True, transform=train_transform_class)
-    val_dataset = FundusClsDataset(val_df, train=False, transform=test_transform_class)
-    test_dataset = FundusClsDataset(test_df, train=False, transform=test_transform_class)
+    train_dataset = FundusClsDataset(train_df, train=True,  transform=train_transform_class)
+    val_dataset   = FundusClsDataset(val_df,   train=False, transform=test_transform_class)
+    test_dataset  = FundusClsDataset(test_df,  train=False, transform=test_transform_class)
     calib_dataset = FundusClsDataset(train_df, train=False, transform=test_transform_class)
 
-    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True,  num_workers=4, pin_memory=True)
+    val_loader   = DataLoader(val_dataset,   batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader  = DataLoader(test_dataset,  batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
     calib_loader = DataLoader(calib_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
-    # ── Model ────────────────────────────────────────────────────────────
+    # ── Model ─────────────────────────────────────────────────────────────
+    tag = model_tag(WEIGHT_BITS, ACT_BITS)
     print("\n" + "=" * 50)
-    print("Creating QuantResNet18 ...")
+    print(f"Creating QuantMobileNetV1 [{tag}] ...")
     print("=" * 50)
-    model = QuantResNet18(nr_classes=cfg.nr_classes)
-    print("QuantResNet18 instantiated.")
+    model = QuantMobileNetV1(
+        nr_classes=cfg.nr_classes,
+        weight_bit_width=WEIGHT_BITS,
+        act_bit_width=ACT_BITS,
+    )
 
-    # ── Load KD weights ──────────────────────────────────────────────────
-    ckpt_path = find_latest_checkpoint(cfg.models_dir, "student_kd_*.pth")
-    print(f"\nLoading KD weights from: {ckpt_path}")
-    missing, unexpected = load_kd_weights(model, ckpt_path)
+    ckpt_path = os.path.join(cfg.models_dir, "mobilenetv1_fp32_kd.pth")
+    print(f"\nLoading FP32 KD weights from: {ckpt_path}")
+    missing, unexpected = load_timm_weights(model, checkpoint_path=ckpt_path)
 
-    non_quant_missing = [k for k in missing if not any(
-        tag in k for tag in [
-            "tensor_quant", "scaling_impl", "int_scaling_impl",
-            "zero_point", "msb_clamp_bit_width_impl",
-            "act_quant", "weight_quant", "bias_quant",
-        ]
-    )]
+    QUANTIZER_TAGS = [
+        "tensor_quant", "scaling_impl", "int_scaling_impl",
+        "zero_point", "msb_clamp_bit_width_impl",
+        "act_quant", "weight_quant", "bias_quant",
+    ]
+    non_quant_missing = [k for k in missing if not any(t in k for t in QUANTIZER_TAGS)]
     if non_quant_missing:
         print(f"\n[WARNING] Non-quantizer keys missing: {non_quant_missing}")
     if unexpected:
@@ -219,7 +214,7 @@ def main(cfg: DictConfig) -> None:
     patience_counter = 0
     best_epoch = -1
 
-    logname = os.path.join(cfg.results_dir, "qat_finetune_log.csv")
+    logname = os.path.join(cfg.results_dir, "qat_mobilenet_log.csv")
     with open(logname, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -261,18 +256,17 @@ def main(cfg: DictConfig) -> None:
             print(f"Early stopping at epoch {epoch} (patience={PATIENCE})")
             break
 
-    # Restore best model
     if best_state is not None:
         model.load_state_dict(best_state)
         print(f"\nRestored best model from epoch {best_epoch} (val F1: {best_val_f1:.2f}%)")
     model.to(device)
 
-    # ── Save QAT checkpoint ──────────────────────────────────────────────
-    qat_ckpt_path = os.path.join(cfg.models_dir, "student_kd_resnet18_qat.pth")
+    # ── Save checkpoint ───────────────────────────────────────────────────
+    qat_ckpt_path = os.path.join(cfg.models_dir, f"mobilenet_{tag}_qat.pth")
     torch.save(model.state_dict(), qat_ckpt_path)
     print(f"QAT checkpoint saved -> {qat_ckpt_path}")
 
-    # ── Test evaluation ──────────────────────────────────────────────────
+    # ── Test evaluation ───────────────────────────────────────────────────
     print("\n" + "=" * 50)
     print("Evaluating QAT model on test set ...")
     print("=" * 50)
@@ -280,24 +274,26 @@ def main(cfg: DictConfig) -> None:
         model=model,
         test_loader=test_loader,
         device=device,
-        model_type="student_kd_qat",
+        model_type=f"mobilenet_{tag}_qat",
         bootstrap=True,
         savedir=cfg.results_dir,
     )
     print(f"QAT test metrics: {test_metrics}")
 
-    # ── Summary report ───────────────────────────────────────────────────
+    # ── Summary report ────────────────────────────────────────────────────
     report = {
+        "weight_bits": WEIGHT_BITS,
+        "act_bits": ACT_BITS,
         "qat_epochs": best_epoch + 1,
         "best_val_f1": round(best_val_f1, 4),
         "checkpoint": qat_ckpt_path,
         "input_size": [1, 3, 512, 512],
     }
-    report_path = os.path.join(cfg.results_dir, "qat_finetune_report.json")
+    report_path = os.path.join(cfg.results_dir, "qat_mobilenet_report.json")
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
     print(f"\nReport saved -> {report_path}")
-    print("\nNext step: run export_qat.py to fold BN and export QONNX.")
+    print("\nNext step: run export_mobilenet.py to export QONNX.")
 
 
 if __name__ == "__main__":

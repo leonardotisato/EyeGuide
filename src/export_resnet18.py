@@ -1,15 +1,14 @@
 """
-Export QAT checkpoint to QONNX.
+Export ResNet18 4w4a QAT checkpoint to QONNX.
 
-Loads the QAT checkpoint saved by qat_finetune.py and exports to QONNX.
+Loads the QAT checkpoint saved by qat_resnet18.py and exports to QONNX.
 No recalibration — the checkpoint already contains trained quantizer scales.
 
 BatchNorm nodes remain in the exported graph — FINN's Streamline()
-transformation handles BN folding during the build pipeline, which is the
-standard approach used by finn-examples.
+transformation handles BN folding during the build pipeline.
 
 Run with:
-    python src/export_qat.py
+    bash run_export_resnet18.sh
 """
 
 import os
@@ -35,8 +34,12 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 from utils.seed import set_seeds
-from utils.quant_model import QuantResNet18
+from utils.quant_resnet18 import QuantResNet18, model_tag
 from utils.transforms import SIZE
+
+
+WEIGHT_BITS = 4
+ACT_BITS = 4
 
 
 @hydra.main(config_path="../config", config_name="config", version_base=None)
@@ -47,14 +50,20 @@ def main(cfg: DictConfig) -> None:
 
     os.makedirs(cfg.results_dir, exist_ok=True)
 
+    tag = model_tag(WEIGHT_BITS, ACT_BITS)
+
     # ── Load QAT checkpoint ──────────────────────────────────────────────
-    ckpt_path = os.path.join(cfg.models_dir, "student_kd_resnet18_qat.pth")
+    ckpt_path = os.path.join(cfg.models_dir, "resnet18_4w4a_qat.pth")
     if not os.path.exists(ckpt_path):
         print(f"[ERROR] QAT checkpoint not found: {ckpt_path}")
-        print("Run qat_finetune.py first.")
+        print("Run qat_resnet18.py first.")
         return
 
-    model = QuantResNet18(nr_classes=cfg.nr_classes)
+    model = QuantResNet18(
+        nr_classes=cfg.nr_classes,
+        weight_bit_width=WEIGHT_BITS,
+        act_bit_width=ACT_BITS,
+    )
     state_dict = torch.load(ckpt_path, map_location="cpu")
     model.load_state_dict(state_dict)
     model.to(device)
@@ -62,7 +71,7 @@ def main(cfg: DictConfig) -> None:
     print(f"Loaded QAT checkpoint: {ckpt_path}")
 
     # ── Export to QONNX ──────────────────────────────────────────────────
-    export_path = os.path.join(cfg.models_dir, "student_kd_int8_qat.onnx")
+    export_path = os.path.join(cfg.models_dir, f"resnet18_{tag}.onnx")
     dummy_input = torch.randn(1, 3, SIZE, SIZE).to(device)
 
     print("\nExporting to QONNX ...")
@@ -96,6 +105,7 @@ def main(cfg: DictConfig) -> None:
         print("Skipping numerical validation (qonnx not available).")
 
     print(f"\nDone. Exported model: {export_path}")
+    print(f"Next: python src/finn_build/build_resnet18.py --estimates-only --onnx models/resnet18_{tag}.onnx")
 
 
 if __name__ == "__main__":

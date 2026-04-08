@@ -5,7 +5,7 @@ Based on: ignore/finn-examples-rn18/build/resnet18/build.py
 
 Key differences from finn-examples:
   - Target: Ultra96-v2 (Zynq, VIVADO_ZYNQ) instead of Alveo U250
-  - Model: 8w8a INT8 fundus classifier (4 classes, 512x512 input)
+  - Model: 4w4a fundus classifier (4 classes, 512x512 input)
   - Custom steps handle MaxPool and GlobalAveragePool (not in finn-examples)
   - Preprocessing includes ImageNet normalization (not just ToTensor)
   - No SLR floorplanning (Zynq, not Alveo)
@@ -33,8 +33,8 @@ import sys
 parser = argparse.ArgumentParser(
     description="FINN dataflow build for QAT INT8 ResNet18 -> Ultra96-v2."
 )
-parser.add_argument("--onnx", default="models/student_kd_int8_qat.onnx")
-parser.add_argument("--output-dir", default="./build_ultra96_qat")
+parser.add_argument("--onnx", default="models/resnet18_4w4a.onnx")
+parser.add_argument("--output-dir", default="./build_finn")
 parser.add_argument("--estimates-only", action="store_true")
 parser.add_argument("--stop-after", default=None,
                     help="Stop after this step name (for incremental debugging).")
@@ -55,7 +55,7 @@ try:
     from finn.builder.build_dataflow import build_dataflow_cfg
     from finn.util.basic import pynq_part_map, alveo_part_map
 
-    from custom_steps import (
+    from custom_steps_resnet18 import (
         step_fundus_attach_preproc,
         step_fundus_streamline,
         step_fundus_lower,
