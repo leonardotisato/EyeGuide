@@ -1,10 +1,10 @@
 """
-QAT fine-tuning for ResNet18 4w4a: load KD weights, calibrate, train, evaluate, save checkpoint.
+QAT fine-tuning for test_resnet 8w8a: load FP32 weights, calibrate, train, evaluate.
 
-Export is handled separately by export_resnet18.py.
+Export is handled separately by export_test_resnet.py.
 
 Run with:
-    bash run_qat_resnet18.sh
+    bash run_qat_test_resnet.sh
 """
 
 import os
@@ -15,6 +15,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -29,23 +30,23 @@ from brevitas.graph.calibrate import calibration_mode
 
 sys.path.insert(0, os.path.dirname(__file__))
 from utils.seed import set_seeds
-from utils.quant_resnet18 import QuantResNet18, load_kd_weights, model_tag
+from utils.quant_test_resnet import QuantTestResNet, load_fp32_weights, model_tag
 from utils.dataset import FundusClsDataset, prepare_dataframes
-from utils.transforms_512_light import test_transform_class, train_transform_class
+from utils.transforms_224_strong import test_transform_class, train_transform_class
 from utils.training import test
 from utils.generals import progress_bar
 
 
-WEIGHT_BITS = 4
-ACT_BITS = 4
+WEIGHT_BITS = 8
+ACT_BITS = 8
 
 # ─── QAT hyperparameters ────────────────────────────────────────────────────
-QAT_LR = 1e-4
-QAT_EPOCHS = 60
+QAT_LR = 1e-5
+QAT_EPOCHS = 120
 QAT_WEIGHT_DECAY = 1e-4
 CALIB_BATCHES = 100
-BN_FREEZE_EPOCH = 5       # freeze BN running stats after this epoch
-PATIENCE = 20              # early stopping on val F1
+BN_FREEZE_EPOCH = 5
+PATIENCE = 20
 
 
 def freeze_bn(model):
@@ -154,25 +155,40 @@ def main(cfg: DictConfig) -> None:
     test_loader = DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
     calib_loader = DataLoader(calib_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
+    # ── Class weights (inverse frequency) ───────────────────────────────
+    label_counts = train_df['label'].value_counts().sort_index().values.astype(float)
+    class_weights = 1.0 / label_counts
+    class_weights = class_weights / class_weights.sum() * len(class_weights)
+    class_weights = torch.tensor(class_weights, dtype=torch.float32).to(device)
+    print(f"Class counts (train): {label_counts.astype(int).tolist()}")
+    print(f"Class weights: {class_weights.cpu().numpy().round(4).tolist()}")
+
     # ── Model ────────────────────────────────────────────────────────────
     tag = model_tag(WEIGHT_BITS, ACT_BITS)
     print("\n" + "=" * 50)
-    print(f"Creating QuantResNet18 [{tag}] ...")
+    print(f"Creating QuantTestResNet [{tag}]")
     print("=" * 50)
-    model = QuantResNet18(
+    model = QuantTestResNet(
         nr_classes=cfg.nr_classes,
         weight_bit_width=WEIGHT_BITS,
         act_bit_width=ACT_BITS,
     )
-    print(f"QuantResNet18 instantiated: {WEIGHT_BITS}w{ACT_BITS}a")
 
-    # ── Load KD weights ──────────────────────────────────────────────────
-    ckpt_path = os.path.join(cfg.models_dir, "resnet18_fp32_kd.pth")
-    print(f"\nLoading KD weights from: {ckpt_path}")
-    missing, unexpected = load_kd_weights(model, ckpt_path)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Parameters: {n_params:,}")
+
+    # ── Load FP32 weights ────────────────────────────────────────────────
+    ckpt_path = os.path.join(cfg.models_dir, "test_resnet_fp32_kd.pth")
+    if not os.path.exists(ckpt_path):
+        print(f"[ERROR] FP32 checkpoint not found: {ckpt_path}")
+        print("Run train_test_resnet.py first.")
+        return
+
+    print(f"\nLoading FP32 weights from: {ckpt_path}")
+    missing, unexpected = load_fp32_weights(model, ckpt_path)
 
     non_quant_missing = [k for k in missing if not any(
-        tag in k for tag in [
+        tag_str in k for tag_str in [
             "tensor_quant", "scaling_impl", "int_scaling_impl",
             "zero_point", "msb_clamp_bit_width_impl",
             "act_quant", "weight_quant", "bias_quant",
@@ -217,7 +233,7 @@ def main(cfg: DictConfig) -> None:
     patience_counter = 0
     best_epoch = -1
 
-    logname = os.path.join(cfg.results_dir, "qat_resnet18_log.csv")
+    logname = os.path.join(cfg.results_dir, f"qat_test_resnet_{tag}_log.csv")
     with open(logname, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -259,14 +275,13 @@ def main(cfg: DictConfig) -> None:
             print(f"Early stopping at epoch {epoch} (patience={PATIENCE})")
             break
 
-    # Restore best model
     if best_state is not None:
         model.load_state_dict(best_state)
         print(f"\nRestored best model from epoch {best_epoch} (val F1: {best_val_f1:.2f}%)")
     model.to(device)
 
     # ── Save QAT checkpoint ──────────────────────────────────────────────
-    qat_ckpt_path = os.path.join(cfg.models_dir, f"resnet18_{tag}_qat.pth")
+    qat_ckpt_path = os.path.join(cfg.models_dir, f"test_resnet_{tag}_qat.pth")
     torch.save(model.state_dict(), qat_ckpt_path)
     print(f"QAT checkpoint saved -> {qat_ckpt_path}")
 
@@ -278,7 +293,7 @@ def main(cfg: DictConfig) -> None:
         model=model,
         test_loader=test_loader,
         device=device,
-        model_type="student_kd_qat",
+        model_type=f"test_resnet_{tag}_qat",
         bootstrap=True,
         savedir=cfg.results_dir,
     )
@@ -286,16 +301,20 @@ def main(cfg: DictConfig) -> None:
 
     # ── Summary report ───────────────────────────────────────────────────
     report = {
+        "weight_bits": WEIGHT_BITS,
+        "act_bits": ACT_BITS,
+        "n_params": n_params,
         "qat_epochs": best_epoch + 1,
         "best_val_f1": round(best_val_f1, 4),
         "checkpoint": qat_ckpt_path,
-        "input_size": [1, 3, 512, 512],
+        "fp32_checkpoint": ckpt_path,
+        "input_size": [1, 3, 224, 224],
     }
-    report_path = os.path.join(cfg.results_dir, "qat_resnet18_report.json")
+    report_path = os.path.join(cfg.results_dir, f"qat_test_resnet_{tag}_report.json")
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
     print(f"\nReport saved -> {report_path}")
-    print("\nNext step: run export_resnet18.py to export QONNX.")
+    print("\nNext step: run export_test_resnet.py to export QONNX.")
 
 
 if __name__ == "__main__":

@@ -3,18 +3,18 @@
 # Usage: bash run.sh <command> [args...]
 #
 # Commands:
-#   train_test_resnet       FP32 fine-tune test_resnet.r160_in1k
+#   train_test_resnet       Canonical FP32 fine-tune for test_resnet (KD + unweighted + strong aug)
+#   eval_teacher_224        Validate ResNet18 teacher at 224x224
 #   qat_test_resnet         QAT for test_resnet
 #   export_test_resnet      QONNX export for test_resnet
-#   train_custom_net        FP32 training of CustomSmallNet
-#   train_custom_net_kd     FP32 training of CustomSmallNet with KD
+#   train_custom_net        Canonical FP32 training for custom_net (m=3, strong aug, weighted CE)
 #   qat_custom_net          QAT for CustomSmallNet
 #   export_custom_net       QONNX export for CustomSmallNet
 #   qat_resnet18            QAT for ResNet18
 #   export_resnet18         QONNX export for ResNet18
-#   qat_mobilenet           QAT for MobileNetV1
-#   export_mobilenet        QONNX export for MobileNetV1
-#   finetune_mobilenetv1    FP32 KD fine-tune of MobileNetV1
+#   train_mobilenetv1       Canonical FP32 KD fine-tune for MobileNetV1
+#   qat_mobilenetv1         QAT for MobileNetV1
+#   export_mobilenetv1      QONNX export for MobileNetV1
 #
 # FINN builds use a different container — use run_finn.sh instead.
 
@@ -31,17 +31,17 @@ shift
 
 case "$CMD" in
     train_test_resnet)      SCRIPT="src/train_test_resnet.py" ;;
+    eval_teacher_224)       SCRIPT="src/eval_teacher_224.py" ;;
     qat_test_resnet)        SCRIPT="src/qat_test_resnet.py" ;;
     export_test_resnet)     SCRIPT="src/export_test_resnet.py" ;;
     train_custom_net)       SCRIPT="src/train_custom_net.py" ;;
-    train_custom_net_kd)    SCRIPT="src/train_custom_net_kd.py" ;;
     qat_custom_net)         SCRIPT="src/qat_custom_net.py" ;;
     export_custom_net)      SCRIPT="src/export_custom_net.py" ;;
     qat_resnet18)           SCRIPT="src/qat_resnet18.py" ;;
     export_resnet18)        SCRIPT="src/export_resnet18.py" ;;
-    qat_mobilenet)          SCRIPT="src/qat_mobilenet.py" ;;
-    export_mobilenet)       SCRIPT="src/export_mobilenet.py" ;;
-    finetune_mobilenetv1)   SCRIPT="src/finetune_mobilenetv1_fp32.py" ;;
+    train_mobilenetv1)      SCRIPT="src/train_mobilenetv1.py" ;;
+    qat_mobilenetv1)        SCRIPT="src/qat_mobilenetv1.py" ;;
+    export_mobilenetv1)     SCRIPT="src/export_mobilenetv1.py" ;;
     --help)
         head -17 "$0" | tail -16
         exit 0

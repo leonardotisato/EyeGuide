@@ -1,14 +1,14 @@
 """
-FP32 fine-tuning of MobileNetV1 with Knowledge Distillation.
+Canonical FP32 fine-tuning of MobileNetV1 with Knowledge Distillation.
 
 Uses timm mobilenetv1_100 (ImageNet pretrained) as student backbone.
 Teacher: ResNet18 FP32 KD checkpoint (resnet18_fp32_kd.pth, 87.2% acc).
 
 Saves FP32 checkpoint in timm key format -> mobilenetv1_fp32_kd.pth.
-This checkpoint is then loaded by qat_mobilenet.py for QAT fine-tuning.
+This checkpoint is then loaded by qat_mobilenetv1.py for QAT fine-tuning.
 
 Run with:
-    bash run_finetune_mobilenetv1_fp32.sh
+    python src/train_mobilenetv1.py
 """
 
 import os
@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from utils.seed import set_seeds
 from utils.model import ResNet18Classifier
 from utils.dataset import FundusClsDataset, prepare_dataframes
-from utils.transforms import test_transform_class, train_transform_class
+from utils.transforms_512_light import test_transform_class, train_transform_class
 from utils.training import test
 from utils.generals import progress_bar
 
@@ -179,7 +179,7 @@ def main(cfg: DictConfig) -> None:
     patience_counter = 0
     best_epoch = -1
 
-    logname = os.path.join(cfg.results_dir, "finetune_mobilenetv1_fp32_log.csv")
+    logname = os.path.join(cfg.results_dir, "train_mobilenetv1_log.csv")
     with open(logname, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["epoch", "train_loss", "train_acc", "train_f1",
@@ -246,11 +246,11 @@ def main(cfg: DictConfig) -> None:
         "kd_temperature": KD_TEMPERATURE,
         "kd_alpha": KD_ALPHA,
     }
-    report_path = os.path.join(cfg.results_dir, "finetune_mobilenetv1_fp32_report.json")
+    report_path = os.path.join(cfg.results_dir, "train_mobilenetv1_report.json")
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
     print(f"\nReport saved -> {report_path}")
-    print("\nNext step: run qat_mobilenet.py to QAT fine-tune.")
+    print("\nNext step: run qat_mobilenetv1.py to QAT fine-tune.")
 
 
 if __name__ == "__main__":

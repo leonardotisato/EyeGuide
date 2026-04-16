@@ -13,7 +13,7 @@ from utils.losses import kd_loss
 from utils.training import train, train_knowledge_distillation, test
 from utils.model import ResNet18Classifier, VGG16Classifier, ViTClassifier, SwinClassifier
 from utils.dataset import FundusClsDataset, FundusClsDatasetZoom, PairedFundusDataset, prepare_dataframes
-from utils.transforms import train_transform_class, test_transform_class
+from utils.transforms_512_light import train_transform_class, test_transform_class
 from utils.generals import getOutFileName
 import numpy as np
 import json

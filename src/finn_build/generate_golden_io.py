@@ -30,7 +30,7 @@ from omegaconf import DictConfig
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.seed import set_seeds
 from utils.quant_resnet18 import QuantResNet18
-from utils.transforms import SIZE
+from utils.transforms_512_light import SIZE
 from utils.dataset import prepare_dataframes
 
 # Reuse the preprocessing module from our custom FINN steps

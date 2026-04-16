@@ -1,11 +1,11 @@
 """
-QAT fine-tuning for MobileNetV1 8w8a: load FP32 KD weights, calibrate, train, evaluate, save.
+QAT fine-tuning for CustomSmallNet: load the canonical FP32 weights, calibrate,
+train, and evaluate.
 
-Mirrors qat_resnet18.py exactly — plain CE loss, BN freeze at epoch 5, same LR/wd.
-Float (LOG_FP) quantizers with per-channel activation scaling on stem and PW convs.
+Export is handled separately by export_custom_net.py.
 
 Run with:
-    bash run_qat_mobilenet.sh
+    bash run_qat_custom_net.sh
 """
 
 import os
@@ -16,6 +16,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -30,26 +31,28 @@ from brevitas.graph.calibrate import calibration_mode
 
 sys.path.insert(0, os.path.dirname(__file__))
 from utils.seed import set_seeds
-from utils.quant_mobilenetv1 import QuantMobileNetV1, load_timm_weights, model_tag
+from utils.quant_custom_net import QuantCustomSmallNet, load_fp32_weights, model_tag
 from utils.dataset import FundusClsDataset, prepare_dataframes
-from utils.transforms import test_transform_class, train_transform_class
+from utils.transforms_512_strong import test_transform_class, train_transform_class
 from utils.training import test
 from utils.generals import progress_bar
 
 
 WEIGHT_BITS = 8
 ACT_BITS = 8
+MULTIPLIER = 3
 
-# ─── QAT hyperparameters (mirrors qat_resnet18.py) ──────────────────────────
-QAT_LR           = 1e-4
-QAT_EPOCHS       = 60
+# ─── QAT hyperparameters ────────────────────────────────────────────────────
+QAT_LR = 1e-4
+QAT_EPOCHS = 60
 QAT_WEIGHT_DECAY = 1e-4
-CALIB_BATCHES    = 100
-BN_FREEZE_EPOCH  = 999
-PATIENCE         = 20
+CALIB_BATCHES = 100
+BN_FREEZE_EPOCH = 5
+PATIENCE = 20
 
 
 def freeze_bn(model):
+    """Set all BatchNorm layers to eval mode (freeze running stats)."""
     for m in model.modules():
         if isinstance(m, (nn.BatchNorm2d, nn.BatchNorm1d)):
             m.eval()
@@ -144,37 +147,57 @@ def main(cfg: DictConfig) -> None:
     # ── Data ─────────────────────────────────────────────────────────────
     train_df, val_df, test_df = prepare_dataframes(cfg)
 
-    train_dataset = FundusClsDataset(train_df, train=True,  transform=train_transform_class)
-    val_dataset   = FundusClsDataset(val_df,   train=False, transform=test_transform_class)
-    test_dataset  = FundusClsDataset(test_df,  train=False, transform=test_transform_class)
+    train_dataset = FundusClsDataset(train_df, train=True, transform=train_transform_class)
+    val_dataset = FundusClsDataset(val_df, train=False, transform=test_transform_class)
+    test_dataset = FundusClsDataset(test_df, train=False, transform=test_transform_class)
     calib_dataset = FundusClsDataset(train_df, train=False, transform=test_transform_class)
 
-    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True,  num_workers=4, pin_memory=True)
-    val_loader   = DataLoader(val_dataset,   batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
-    test_loader  = DataLoader(test_dataset,  batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
     calib_loader = DataLoader(calib_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
-    # ── Model ─────────────────────────────────────────────────────────────
+    # ── Class weights (inverse frequency) ───────────────────────────────
+    label_counts = train_df['label'].value_counts().sort_index().values.astype(float)
+    class_weights = 1.0 / label_counts
+    class_weights = class_weights / class_weights.sum() * len(class_weights)
+    class_weights = torch.tensor(class_weights, dtype=torch.float32).to(device)
+    print(f"Class counts (train): {label_counts.astype(int).tolist()}")
+    print(f"Class weights: {class_weights.cpu().numpy().round(4).tolist()}")
+
+    # ── Model ────────────────────────────────────────────────────────────
     tag = model_tag(WEIGHT_BITS, ACT_BITS)
     print("\n" + "=" * 50)
-    print(f"Creating QuantMobileNetV1 [{tag}] ...")
+    print(f"Creating QuantCustomSmallNet [{tag}] (multiplier={MULTIPLIER})")
     print("=" * 50)
-    model = QuantMobileNetV1(
+    model = QuantCustomSmallNet(
         nr_classes=cfg.nr_classes,
+        multiplier=MULTIPLIER,
         weight_bit_width=WEIGHT_BITS,
         act_bit_width=ACT_BITS,
     )
 
-    ckpt_path = os.path.join(cfg.models_dir, "mobilenetv1_fp32_kd.pth")
-    print(f"\nLoading FP32 KD weights from: {ckpt_path}")
-    missing, unexpected = load_timm_weights(model, checkpoint_path=ckpt_path)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Parameters: {n_params:,}")
 
-    QUANTIZER_TAGS = [
-        "tensor_quant", "scaling_impl", "int_scaling_impl",
-        "zero_point", "msb_clamp_bit_width_impl",
-        "act_quant", "weight_quant", "bias_quant",
-    ]
-    non_quant_missing = [k for k in missing if not any(t in k for t in QUANTIZER_TAGS)]
+    # ── Load FP32 KD weights ─────────────────────────────────────────────
+    ckpt_path = os.path.join(cfg.models_dir, f"custom_net_m{MULTIPLIER}_fp32.pth")
+    if not os.path.exists(ckpt_path):
+        print(f"[ERROR] FP32 checkpoint not found: {ckpt_path}")
+        print("Run train_custom_net.py first.")
+        return
+
+    print(f"\nLoading FP32 weights from: {ckpt_path}")
+
+    missing, unexpected = load_fp32_weights(model, ckpt_path)
+
+    non_quant_missing = [k for k in missing if not any(
+        tag_str in k for tag_str in [
+            "tensor_quant", "scaling_impl", "int_scaling_impl",
+            "zero_point", "msb_clamp_bit_width_impl",
+            "act_quant", "weight_quant", "bias_quant",
+        ]
+    )]
     if non_quant_missing:
         print(f"\n[WARNING] Non-quantizer keys missing: {non_quant_missing}")
     if unexpected:
@@ -205,7 +228,7 @@ def main(cfg: DictConfig) -> None:
     print(f"BN freeze after epoch {BN_FREEZE_EPOCH}, patience={PATIENCE}")
     print("=" * 50)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=QAT_LR, weight_decay=QAT_WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=QAT_EPOCHS)
 
@@ -214,7 +237,7 @@ def main(cfg: DictConfig) -> None:
     patience_counter = 0
     best_epoch = -1
 
-    logname = os.path.join(cfg.results_dir, "qat_mobilenet_log.csv")
+    logname = os.path.join(cfg.results_dir, f"qat_custom_net_m{MULTIPLIER}_{tag}_log.csv")
     with open(logname, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -261,12 +284,12 @@ def main(cfg: DictConfig) -> None:
         print(f"\nRestored best model from epoch {best_epoch} (val F1: {best_val_f1:.2f}%)")
     model.to(device)
 
-    # ── Save checkpoint ───────────────────────────────────────────────────
-    qat_ckpt_path = os.path.join(cfg.models_dir, f"mobilenet_{tag}_qat.pth")
+    # ── Save QAT checkpoint ──────────────────────────────────────────────
+    qat_ckpt_path = os.path.join(cfg.models_dir, f"custom_net_m{MULTIPLIER}_{tag}_qat.pth")
     torch.save(model.state_dict(), qat_ckpt_path)
     print(f"QAT checkpoint saved -> {qat_ckpt_path}")
 
-    # ── Test evaluation ───────────────────────────────────────────────────
+    # ── Test evaluation ──────────────────────────────────────────────────
     print("\n" + "=" * 50)
     print("Evaluating QAT model on test set ...")
     print("=" * 50)
@@ -274,26 +297,29 @@ def main(cfg: DictConfig) -> None:
         model=model,
         test_loader=test_loader,
         device=device,
-        model_type=f"mobilenet_{tag}_qat",
+        model_type=f"custom_net_m{MULTIPLIER}_{tag}_qat",
         bootstrap=True,
         savedir=cfg.results_dir,
     )
     print(f"QAT test metrics: {test_metrics}")
 
-    # ── Summary report ────────────────────────────────────────────────────
+    # ── Summary report ───────────────────────────────────────────────────
     report = {
+        "multiplier": MULTIPLIER,
         "weight_bits": WEIGHT_BITS,
         "act_bits": ACT_BITS,
+        "n_params": n_params,
         "qat_epochs": best_epoch + 1,
         "best_val_f1": round(best_val_f1, 4),
         "checkpoint": qat_ckpt_path,
+        "fp32_checkpoint": ckpt_path,
         "input_size": [1, 3, 512, 512],
     }
-    report_path = os.path.join(cfg.results_dir, "qat_mobilenet_report.json")
+    report_path = os.path.join(cfg.results_dir, f"qat_custom_net_m{MULTIPLIER}_{tag}_report.json")
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
     print(f"\nReport saved -> {report_path}")
-    print("\nNext step: run export_mobilenet.py to export QONNX.")
+    print("\nNext step: run export_custom_net.py to export QONNX.")
 
 
 if __name__ == "__main__":

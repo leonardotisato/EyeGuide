@@ -195,7 +195,7 @@ class QuantMobileNetV1(nn.Module):
             kernel_size=_AVGPOOL_KERNEL,
             stride=1,
             bit_width=act_bit_width,
-            float_to_int_impl_type='ROUND',
+            float_to_int_impl_type='FLOOR',
         )
         self.fc = qnn.QuantLinear(
             1024, nr_classes,
