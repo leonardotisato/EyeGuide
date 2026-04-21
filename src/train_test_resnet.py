@@ -35,7 +35,8 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(__file__))
 from utils.dataset import FundusClsDataset, prepare_dataframes, safe_pil_read
 from utils.generals import progress_bar
-from utils.model import ResNet18Classifier
+# from utils.model import ResNet18Classifier
+from utils.model import ResNet50Classifier
 from utils.seed import set_seeds
 from utils.training import test
 from utils.transforms_224_strong import (
@@ -198,13 +199,17 @@ def main(cfg: DictConfig) -> None:
         test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True
     )
 
-    teacher_path = os.path.join(cfg.models_dir, "resnet18_fp32_kd.pth")
+    # --- old ResNet18 teacher (kept for reference / rollback) ---
+    # teacher_path = os.path.join(cfg.models_dir, "resnet18_fp32_kd.pth")
+    teacher_path = os.path.join(cfg.models_dir, "resnet50_fp32_kd.pth")
     if not os.path.exists(teacher_path):
         print(f"[ERROR] Teacher checkpoint not found: {teacher_path}")
         return
 
     print(f"Loading teacher from: {teacher_path}")
-    teacher = ResNet18Classifier(nr_classes=cfg.nr_classes, pretrained=False)
+    # --- old ResNet18 teacher instantiation (kept for reference / rollback) ---
+    # teacher = ResNet18Classifier(nr_classes=cfg.nr_classes, pretrained=False)
+    teacher = ResNet50Classifier(nr_classes=cfg.nr_classes, pretrained=False)
     teacher.load_state_dict(torch.load(teacher_path, map_location="cpu"))
     teacher.to(device)
     teacher.eval()

@@ -20,6 +20,7 @@ import numpy as np
 import hydra
 from omegaconf import DictConfig
 from brevitas.export import export_qonnx
+from omegaconf import OmegaConf
 
 try:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -36,25 +37,26 @@ from utils.quant_test_resnet import QuantTestResNet, model_tag
 from utils.transforms_224_strong import SIZE
 
 
-WEIGHT_BITS = 8
-ACT_BITS = 8
-
-
 @hydra.main(config_path="../config", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
     set_seeds(cfg.RANDOM_SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
+    WEIGHT_BITS = int(OmegaConf.select(cfg, "weight_bits", default=8))
+    ACT_BITS = int(OmegaConf.select(cfg, "act_bits", default=8))
+    use_kd = bool(OmegaConf.select(cfg, "kd", default=False))
+
     os.makedirs(cfg.results_dir, exist_ok=True)
 
     tag = model_tag(WEIGHT_BITS, ACT_BITS)
+    ckpt_suffix = "kd_qat" if use_kd else "qat"
 
     # ── Load QAT checkpoint ──────────────────────────────────────────────
-    ckpt_path = os.path.join(cfg.models_dir, f"test_resnet_{tag}_qat.pth")
+    ckpt_path = os.path.join(cfg.models_dir, f"test_resnet_{tag}_{ckpt_suffix}.pth")
     if not os.path.exists(ckpt_path):
         print(f"[ERROR] QAT checkpoint not found: {ckpt_path}")
-        print("Run qat_test_resnet.py first.")
+        print("Run qat_test_resnet.py or qat_kd_test_resnet.py first.")
         return
 
     model = QuantTestResNet(
@@ -69,7 +71,8 @@ def main(cfg: DictConfig) -> None:
     print(f"Loaded QAT checkpoint: {ckpt_path}")
 
     # ── Export to QONNX ──────────────────────────────────────────────────
-    export_path = os.path.join(cfg.models_dir, f"test_resnet_{tag}.onnx")
+    onnx_tag = f"{tag}_kd" if use_kd else tag
+    export_path = os.path.join(cfg.models_dir, f"test_resnet_{onnx_tag}.onnx")
     dummy_input = torch.randn(1, 3, SIZE, SIZE).to(device)
 
     print("\nExporting to QONNX ...")
@@ -103,7 +106,7 @@ def main(cfg: DictConfig) -> None:
         print("Skipping numerical validation (qonnx not available).")
 
     print(f"\nDone. Exported model: {export_path}")
-    print(f"Next: python src/finn_build/build_test_resnet.py --estimates-only --onnx models/test_resnet_{tag}.onnx")
+    print(f"Next: python src/finn_build/build_test_resnet.py --estimates-only --onnx models/test_resnet_{onnx_tag}.onnx")
 
 
 if __name__ == "__main__":

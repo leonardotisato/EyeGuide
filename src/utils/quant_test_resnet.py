@@ -34,17 +34,27 @@ class Int4WeightPerTensorFixedPoint(Int8WeightPerTensorFixedPoint):
     bit_width = 4
 
 
+class Int6WeightPerTensorFixedPoint(Int8WeightPerTensorFixedPoint):
+    bit_width = 6
+
+
 class Uint4ActPerTensorFixedPoint(Uint8ActPerTensorFixedPoint):
     bit_width = 4
 
 
+class Uint6ActPerTensorFixedPoint(Uint8ActPerTensorFixedPoint):
+    bit_width = 6
+
+
 _WEIGHT_QUANT_MAP = {
     4: Int4WeightPerTensorFixedPoint,
+    6: Int6WeightPerTensorFixedPoint,
     8: Int8WeightPerTensorFixedPoint,
 }
 
 _ACT_QUANT_MAP = {
     4: Uint4ActPerTensorFixedPoint,
+    6: Uint6ActPerTensorFixedPoint,
     8: Uint8ActPerTensorFixedPoint,
 }
 

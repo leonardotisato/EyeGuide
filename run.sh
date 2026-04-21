@@ -3,9 +3,11 @@
 # Usage: bash run.sh <command> [args...]
 #
 # Commands:
+#   train_teacher           ResNet50 self-KD teacher training (main.py) — produces resnet50_fp32_kd.pth
 #   train_test_resnet       Canonical FP32 fine-tune for test_resnet (KD + unweighted + strong aug)
 #   eval_teacher_224        Validate ResNet18 teacher at 224x224
 #   qat_test_resnet         QAT for test_resnet
+#   qat_kd_test_resnet      QAT+KD for test_resnet (ResNet50 self-KD teacher, 512x512)
 #   export_test_resnet      QONNX export for test_resnet
 #   train_custom_net        Canonical FP32 training for custom_net (m=3, strong aug, weighted CE)
 #   qat_custom_net          QAT for CustomSmallNet
@@ -30,9 +32,11 @@ CMD="$1"
 shift
 
 case "$CMD" in
+    train_teacher)          SCRIPT="src/main.py" ;;
     train_test_resnet)      SCRIPT="src/train_test_resnet.py" ;;
     eval_teacher_224)       SCRIPT="src/eval_teacher_224.py" ;;
     qat_test_resnet)        SCRIPT="src/qat_test_resnet.py" ;;
+    qat_kd_test_resnet)     SCRIPT="src/qat_kd_test_resnet.py" ;;
     export_test_resnet)     SCRIPT="src/export_test_resnet.py" ;;
     train_custom_net)       SCRIPT="src/train_custom_net.py" ;;
     qat_custom_net)         SCRIPT="src/qat_custom_net.py" ;;
@@ -43,7 +47,7 @@ case "$CMD" in
     qat_mobilenetv1)        SCRIPT="src/qat_mobilenetv1.py" ;;
     export_mobilenetv1)     SCRIPT="src/export_mobilenetv1.py" ;;
     --help)
-        head -17 "$0" | tail -16
+        head -18 "$0" | tail -17
         exit 0
         ;;
     *)
