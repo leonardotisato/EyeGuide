@@ -1,0 +1,19 @@
+config:
+  batch_size: 16
+  loss: kd
+  n_epochs: 500
+  nr_classes: 4
+  student_lr: 0.0001
+  teacher_lr: 0.0001
+  temperature: 3.0
+  weight_decay: 0.0001
+student_kd:
+  accuracy: 91.53846153846153
+  f1: 91.49532318860813
+  precision: 91.78464392750108
+  recall: 91.53846153846153
+teacher:
+  accuracy: 90.0
+  f1: 89.92688428156407
+  precision: 90.11283813318965
+  recall: 90.0
