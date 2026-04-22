@@ -2,6 +2,7 @@
 models/
 logs/
 results*/
+venv/
 
 # model checkpoints
 *.ckpt
