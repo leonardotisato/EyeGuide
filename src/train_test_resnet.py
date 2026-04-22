@@ -2,7 +2,8 @@
 Canonical FP32 fine-tuning of test_resnet.r160_in1k for the active project flow.
 
 This script implements the current consistency-first rerun:
-- Knowledge Distillation from the existing ResNet18 teacher (512x512 light)
+- Knowledge Distillation from the upgraded ResNet18 KD teacher
+  (`resnet18_from_resnet50_fp32_kd.pth`, 512x512 full-image strong train domain)
 - Strong 224x224 student training augmentation
 - Validation uses the same composite KD loss as training
 - Best checkpoint is selected by val_loss, not val_f1
@@ -45,7 +46,7 @@ from utils.transforms_224_light import (
 from utils.transforms_224_strong import (
     train_transform_class as student_train_transform,
 )
-from utils.transforms_512_light import (
+from utils.transforms_512_strong import (
     train_transform_class as teacher_train_transform,
     test_transform_class as teacher_test_transform,
 )
@@ -223,7 +224,7 @@ def main(cfg: DictConfig) -> None:
         test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True
     )
 
-    teacher_path = os.path.join(cfg.models_dir, "resnet18_fp32_kd.pth")
+    teacher_path = os.path.join(cfg.models_dir, "resnet18_from_resnet50_fp32_kd.pth")
     # teacher_path = os.path.join(cfg.models_dir, "resnet50_fp32_kd.pth")
     if not os.path.exists(teacher_path):
         print(f"[ERROR] Teacher checkpoint not found: {teacher_path}")
@@ -237,7 +238,7 @@ def main(cfg: DictConfig) -> None:
     teacher.eval()
     for param in teacher.parameters():
         param.requires_grad = False
-    print("Teacher loaded and frozen (512x512, light aug).")
+    print("Teacher loaded and frozen (512x512 full-image, strong-train/test-eval domain).")
 
     print(f"\n{'=' * 50}")
     print(f"Loading {MODEL_NAME} (pretrained on ImageNet)")
@@ -249,7 +250,10 @@ def main(cfg: DictConfig) -> None:
     print(f"Student parameters: {n_params:,}")
 
     print(f"\nTraining: {EPOCHS} epochs, LR={LR}, patience={PATIENCE}")
-    print("Configuration: KD + unweighted CE + strong student aug (224) + light teacher aug (512)")
+    print(
+        "Configuration: KD + unweighted CE + strong student aug (224) + "
+        "upgraded ResNet18 teacher on 512 strong/eval-test transforms"
+    )
     print(f"KD: temperature={KD_TEMPERATURE}, alpha={KD_ALPHA}")
 
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
@@ -364,7 +368,7 @@ def main(cfg: DictConfig) -> None:
         "best_val_f1": round(best_val_f1, 4),
         "best_val_loss": round(best_val_loss, 4),
         "checkpoint": ckpt_path,
-        "teacher": "resnet18_fp32_kd.pth (512x512 light)",
+        "teacher": "resnet18_from_resnet50_fp32_kd.pth (512x512 full-image strong train / test eval)",
         # "teacher": "resnet50_fp32_kd.pth",
         "student_resolution": 224,
         "teacher_resolution": 512,
