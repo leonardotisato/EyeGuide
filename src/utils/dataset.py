@@ -237,6 +237,55 @@ class PairedFundusDataset(Dataset):
         return img_t, img_s, label_s, image_name
 
 
+class PairedFundusFullDataset(Dataset):
+    """
+    Returns (img_teacher, img_student, label, image_name) using full-image
+    FundusClsDataset on both sides. This is useful when teacher and student
+    share the same full-image input domain during KD.
+    """
+
+    def __init__(
+        self,
+        df,
+        teacher_transform,
+        student_transform,
+        student_train=True,
+        teacher_train=True,
+    ):
+        self.ds_teacher = FundusClsDataset(
+            df,
+            train=teacher_train,
+            transform=teacher_transform,
+        )
+        self.ds_student = FundusClsDataset(
+            df,
+            train=student_train,
+            transform=student_transform,
+        )
+
+        assert len(self.ds_teacher) == len(self.ds_student), "Teacher/Student datasets length mismatch."
+
+        self.data_csv = df.reset_index(drop=True)
+
+    def __len__(self):
+        return len(self.ds_student)
+
+    def __getitem__(self, idx):
+        img_t, label_t = self.ds_teacher[idx]
+        img_s, label_s = self.ds_student[idx]
+
+        if label_t != label_s:
+            raise RuntimeError(f"Label mismatch at idx {idx}: {label_t} vs {label_s}")
+
+        image_name = None
+        if "image" in self.data_csv.columns:
+            image_name = self.data_csv.iloc[idx]["image"]
+        elif "patient" in self.data_csv.columns:
+            image_name = self.data_csv.iloc[idx]["patient"]
+
+        return img_t, img_s, label_s, image_name
+
+
 def _unique_patients_with_label(df, patient_col="patient_id", label_col="label"):
     patients = df[[patient_col, label_col]].drop_duplicates(subset=[patient_col]).reset_index(drop=True)
     return patients
