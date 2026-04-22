@@ -3,7 +3,7 @@ Canonical FP32 fine-tuning of test_resnet.r160_in1k for the active project flow.
 
 This script implements the current consistency-first rerun:
 - Knowledge Distillation from the existing ResNet18 teacher (512x512 light)
-- Light 224x224 student augmentation
+- Strong 224x224 student training augmentation
 - Validation uses the same composite KD loss as training
 - Best checkpoint is selected by val_loss, not val_f1
 
@@ -41,6 +41,8 @@ from utils.seed import set_seeds
 from utils.training import test
 from utils.transforms_224_light import (
     test_transform_class as student_test_transform,
+)
+from utils.transforms_224_strong import (
     train_transform_class as student_train_transform,
 )
 from utils.transforms_512_light import (
@@ -247,7 +249,7 @@ def main(cfg: DictConfig) -> None:
     print(f"Student parameters: {n_params:,}")
 
     print(f"\nTraining: {EPOCHS} epochs, LR={LR}, patience={PATIENCE}")
-    print("Configuration: KD + unweighted CE + light augs (student 224, teacher 512)")
+    print("Configuration: KD + unweighted CE + strong student aug (224) + light teacher aug (512)")
     print(f"KD: temperature={KD_TEMPERATURE}, alpha={KD_ALPHA}")
 
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
