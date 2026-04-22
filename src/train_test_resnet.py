@@ -54,14 +54,12 @@ from utils.transforms_512_strong import (
 
 LR = 1e-4
 # LR = 5e-5
-EPOCHS = 100
-# EPOCHS = 150
+EPOCHS = 200
 WEIGHT_DECAY = 1e-4
-PATIENCE = 30
+PATIENCE = 50
 MODEL_NAME = "test_resnet.r160_in1k"
-KD_TEMPERATURE = 4.0
-# KD_TEMPERATURE = 6.0
-KD_ALPHA = 0.5
+KD_TEMPERATURE = 3.0
+KD_ALPHA = 0.25
 
 
 class DualResDataset(Dataset):
