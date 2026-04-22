@@ -1,10 +1,14 @@
 """
-QAT fine-tuning for test_resnet 8w8a: load FP32 weights, calibrate, train, evaluate.
+QAT fine-tuning for test_resnet: load FP32 weights, calibrate, train, evaluate.
+
+Current script uses the 224x224 light augmentation path selected for the
+consistency-first rerun. Validation/model selection still follow the original
+plain-QAT path (CE on student logits, best checkpoint by val_f1).
 
 Export is handled separately by export_test_resnet.py.
 
 Run with:
-    bash run_qat_test_resnet.sh
+    bash run.sh qat_test_resnet
 """
 
 import os
@@ -32,7 +36,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from utils.seed import set_seeds
 from utils.quant_test_resnet import QuantTestResNet, load_fp32_weights, model_tag
 from utils.dataset import FundusClsDataset, prepare_dataframes
-from utils.transforms_224_strong import test_transform_class, train_transform_class
+from utils.transforms_224_light import test_transform_class, train_transform_class
 from utils.training import test
 from utils.generals import progress_bar
 
