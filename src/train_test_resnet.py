@@ -1,10 +1,11 @@
 """
 Canonical FP32 fine-tuning of test_resnet.r160_in1k for the active project flow.
 
-This script is fixed to the winning configuration:
-- Knowledge Distillation from the ResNet18 teacher
-- Unweighted cross-entropy
-- Strong 224x224 student augmentation
+This script implements the current consistency-first rerun:
+- Knowledge Distillation from the existing ResNet18 teacher (512x512 light)
+- Light 224x224 student augmentation
+- Validation uses the same composite KD loss as training
+- Best checkpoint is selected by val_loss, not val_f1
 
 It produces the canonical FP32 checkpoint consumed by qat_test_resnet.py:
     models/test_resnet_fp32_kd.pth
@@ -22,7 +23,6 @@ import hydra
 import numpy as np
 import timm
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from omegaconf import DictConfig
@@ -35,23 +35,29 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(__file__))
 from utils.dataset import FundusClsDataset, prepare_dataframes, safe_pil_read
 from utils.generals import progress_bar
-# from utils.model import ResNet18Classifier
-from utils.model import ResNet50Classifier
+from utils.model import ResNet18Classifier
+# from utils.model import ResNet50Classifier
 from utils.seed import set_seeds
 from utils.training import test
-from utils.transforms_224_strong import (
+from utils.transforms_224_light import (
     test_transform_class as student_test_transform,
     train_transform_class as student_train_transform,
 )
-from utils.transforms_512_strong import train_transform_class as teacher_train_transform
+from utils.transforms_512_light import (
+    train_transform_class as teacher_train_transform,
+    test_transform_class as teacher_test_transform,
+)
 
 
 LR = 1e-4
+# LR = 5e-5
 EPOCHS = 100
+# EPOCHS = 150
 WEIGHT_DECAY = 1e-4
 PATIENCE = 30
 MODEL_NAME = "test_resnet.r160_in1k"
 KD_TEMPERATURE = 4.0
+# KD_TEMPERATURE = 6.0
 KD_ALPHA = 0.5
 
 
@@ -135,21 +141,33 @@ def train_one_epoch(student, teacher, train_loader, optimizer, device):
     return avg_loss, acc, f1
 
 
-def validate(model, val_loader, criterion, device):
-    model.eval()
-    val_loss = 0.0
+def validate(student, teacher, val_loader, temperature, alpha, device):
+    """KD-composite validation: loss = alpha*CE + (1-alpha)*KL_to_teacher.
+
+    Mirrors main.py / utils/training.py:505 so val_loss is structurally stable
+    and usable as a selection criterion.
+    """
+    student.eval()
+    teacher.eval()
+    val_loss_sum = 0.0
     correct = 0
     total = 0
     all_labels = []
     all_preds = []
 
     with torch.no_grad():
-        for batch_idx, (inputs, labels) in enumerate(val_loader):
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            val_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
+        for batch_idx, (inputs_s, inputs_t, labels) in enumerate(val_loader):
+            inputs_s = inputs_s.to(device)
+            inputs_t = inputs_t.to(device)
+            labels = labels.to(device)
+
+            student_logits = student(inputs_s)
+            teacher_logits = teacher(inputs_t)
+
+            loss = kd_loss(student_logits, teacher_logits, labels, temperature, alpha)
+            val_loss_sum += loss.item()
+
+            _, predicted = torch.max(student_logits.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
             all_labels.extend(labels.cpu().numpy())
@@ -159,10 +177,10 @@ def validate(model, val_loader, criterion, device):
                 batch_idx,
                 len(val_loader),
                 "Val Loss: %.3f | Acc: %.3f%% (%d/%d)"
-                % (val_loss / (batch_idx + 1), 100.0 * correct / total, correct, total),
+                % (val_loss_sum / (batch_idx + 1), 100.0 * correct / total, correct, total),
             )
 
-    avg_loss = val_loss / len(val_loader)
+    avg_loss = val_loss_sum / len(val_loader)
     acc = 100.0 * correct / total
     f1 = f1_score(all_labels, all_preds, average="weighted") * 100.0
     prec = precision_score(all_labels, all_preds, average="weighted") * 100.0
@@ -186,7 +204,11 @@ def main(cfg: DictConfig) -> None:
         student_transform=student_train_transform,
         teacher_transform=teacher_train_transform,
     )
-    val_dataset = FundusClsDataset(val_df, train=False, transform=student_test_transform)
+    val_dataset = DualResDataset(
+        val_df,
+        student_transform=student_test_transform,
+        teacher_transform=teacher_test_transform,
+    )
     test_dataset = FundusClsDataset(test_df, train=False, transform=student_test_transform)
 
     train_loader = DataLoader(
@@ -199,23 +221,21 @@ def main(cfg: DictConfig) -> None:
         test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True
     )
 
-    # --- old ResNet18 teacher (kept for reference / rollback) ---
-    # teacher_path = os.path.join(cfg.models_dir, "resnet18_fp32_kd.pth")
-    teacher_path = os.path.join(cfg.models_dir, "resnet50_fp32_kd.pth")
+    teacher_path = os.path.join(cfg.models_dir, "resnet18_fp32_kd.pth")
+    # teacher_path = os.path.join(cfg.models_dir, "resnet50_fp32_kd.pth")
     if not os.path.exists(teacher_path):
         print(f"[ERROR] Teacher checkpoint not found: {teacher_path}")
         return
 
     print(f"Loading teacher from: {teacher_path}")
-    # --- old ResNet18 teacher instantiation (kept for reference / rollback) ---
-    # teacher = ResNet18Classifier(nr_classes=cfg.nr_classes, pretrained=False)
-    teacher = ResNet50Classifier(nr_classes=cfg.nr_classes, pretrained=False)
+    teacher = ResNet18Classifier(nr_classes=cfg.nr_classes, pretrained=False)
+    # teacher = ResNet50Classifier(nr_classes=cfg.nr_classes, pretrained=False)
     teacher.load_state_dict(torch.load(teacher_path, map_location="cpu"))
     teacher.to(device)
     teacher.eval()
     for param in teacher.parameters():
         param.requires_grad = False
-    print("Teacher loaded and frozen (512x512).")
+    print("Teacher loaded and frozen (512x512, light aug).")
 
     print(f"\n{'=' * 50}")
     print(f"Loading {MODEL_NAME} (pretrained on ImageNet)")
@@ -227,14 +247,15 @@ def main(cfg: DictConfig) -> None:
     print(f"Student parameters: {n_params:,}")
 
     print(f"\nTraining: {EPOCHS} epochs, LR={LR}, patience={PATIENCE}")
-    print("Configuration: KD + unweighted CE + strong 224x224 student augmentation")
+    print("Configuration: KD + unweighted CE + light augs (student 224, teacher 512)")
     print(f"KD: temperature={KD_TEMPERATURE}, alpha={KD_ALPHA}")
 
-    criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
-    best_val_f1 = -1.0
+    # best_val_f1 = -1.0
+    best_val_loss = float("inf")
+    best_val_f1 = -1.0  # still tracked for logging/reporting
     best_state = None
     patience_counter = 0
     best_epoch = -1
@@ -262,7 +283,7 @@ def main(cfg: DictConfig) -> None:
             model, teacher, train_loader, optimizer, device
         )
         val_loss, val_acc, val_f1, val_prec, val_rec = validate(
-            model, val_loader, criterion, device
+            model, teacher, val_loader, KD_TEMPERATURE, KD_ALPHA, device
         )
         scheduler.step()
 
@@ -288,12 +309,22 @@ def main(cfg: DictConfig) -> None:
                 ]
             )
 
-        if val_f1 > best_val_f1:
+        # Selection by val_f1 (noisy on small val set) — replaced by val_loss below.
+        # if val_f1 > best_val_f1:
+        #     best_val_f1 = val_f1
+        #     best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        #     best_epoch = epoch
+        #     patience_counter = 0
+        #     print(f"  -> New best val F1: {val_f1:.2f}% (epoch {epoch})")
+        # else:
+        #     patience_counter += 1
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             best_val_f1 = val_f1
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             best_epoch = epoch
             patience_counter = 0
-            print(f"  -> New best val F1: {val_f1:.2f}% (epoch {epoch})")
+            print(f"  -> New best val loss: {val_loss:.4f} (val F1: {val_f1:.2f}%, epoch {epoch})")
         else:
             patience_counter += 1
 
@@ -303,7 +334,8 @@ def main(cfg: DictConfig) -> None:
 
     if best_state is not None:
         model.load_state_dict(best_state)
-        print(f"\nRestored best model from epoch {best_epoch} (val F1: {best_val_f1:.2f}%)")
+        print(f"\nRestored best model from epoch {best_epoch} "
+              f"(val loss: {best_val_loss:.4f}, val F1: {best_val_f1:.2f}%)")
     model.to(device)
 
     ckpt_path = os.path.join(cfg.models_dir, "test_resnet_fp32_kd.pth")
@@ -328,8 +360,10 @@ def main(cfg: DictConfig) -> None:
         "n_params": n_params,
         "epochs": best_epoch + 1,
         "best_val_f1": round(best_val_f1, 4),
+        "best_val_loss": round(best_val_loss, 4),
         "checkpoint": ckpt_path,
-        "teacher": "resnet18_fp32_kd.pth",
+        "teacher": "resnet18_fp32_kd.pth (512x512 light)",
+        # "teacher": "resnet50_fp32_kd.pth",
         "student_resolution": 224,
         "teacher_resolution": 512,
         "input_size": [1, 3, 224, 224],

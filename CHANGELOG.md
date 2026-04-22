@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-04-21 — Stronger KD teacher (ResNet50)
+
+Replaced ResNet18 KD teacher with a ResNet50 KD.
+
+### Pipeline changes (`src/main.py`)
+- Step-1 teacher: `ResNet18Classifier` → `ResNet50Classifier` (ImageNet pretrained)
+- Step-2 student_kd: same swap (becomes the new KD teacher for test_resnet)
+- Augmentation: `transforms_512_light` → `transforms_512_strong`
+  (fixes mismatch — teacher was trained light but used under strong aug during testresnet KD finetuning and QAT)
+- Checkpoints: `resnet50_fp32_teacher.pth`, `resnet50_fp32_kd.pth`
+- `train_test_resnet.py` and `qat_kd_test_resnet.py` updated to load the R50 teacher
+
+### Results (test F1)
+
+| Stage | Old R18 | New R50 | Δ |
+|---|---|---|---|
+| Step-1 teacher | 82.09% | **87.29%** | +5.20 |
+| Step-2 student_kd (test_resnet teacher) | 86.43% | **91.43%** | +5.00 |
+
+
 ## 2026-04-17 — Bit-width and KD experiments (test_resnet)
 
 ### QAT results

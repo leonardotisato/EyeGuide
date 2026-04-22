@@ -326,7 +326,7 @@ def main(cfg: DictConfig):
     )
 
     # ------------------ student (baseline, non-KD) ------------------
-    # Disabled for the ResNet50 self-KD teacher-training run — we only need
+    # Disabled for the ResNet50 KD teacher-training run — we only need
     # teacher (step 1) and student_kd (step 2). Re-enable by uncommenting if a
     # non-KD ResNet50 baseline is needed for comparison.
     # print("\n================ TRAIN BASELINE =================")

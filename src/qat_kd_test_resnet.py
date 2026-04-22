@@ -1,12 +1,17 @@
 """
 QAT fine-tuning for test_resnet with Knowledge Distillation.
 
-Teacher: ResNet18 FP32 (models/resnet18_fp32_kd.pth, 512x512 input).
+Teacher: ResNet18 FP32 KD (models/resnet18_fp32_kd.pth, 512x512 input).
 Student: QuantTestResNet at configurable bit width (224x224 input).
 
-This mirrors the exact KD objective used in FP32 fine-tuning (train_test_resnet.py):
-  ResNet18 teacher at 512x512, test_resnet student at 224x224, T=4.0, alpha=0.5.
-  DualResDataset provides separate teacher/student crops from the same image.
+Training uses the current light-augmentation KD setup from train_test_resnet.py:
+  teacher receives 512x512 light views
+  student receives 224x224 light views
+  T=4.0, alpha=0.5
+  DualResDataset provides paired teacher/student views from the same image
+
+Validation/model selection in this script still follow the original QAT path
+(CE on student logits, best checkpoint by val_f1).
 
 Checkpoint saved as models/test_resnet_{tag}_kd_qat.pth.
 
@@ -41,13 +46,13 @@ sys.path.insert(0, os.path.dirname(__file__))
 from utils.seed import set_seeds
 from utils.quant_test_resnet import QuantTestResNet, load_fp32_weights, model_tag
 from utils.dataset import FundusClsDataset, prepare_dataframes
-# from utils.model import ResNet18Classifier
-from utils.model import ResNet50Classifier
-from utils.transforms_224_strong import (
+from utils.model import ResNet18Classifier
+# from utils.model import ResNet50Classifier
+from utils.transforms_224_light import (
     test_transform_class as student_test_transform,
     train_transform_class as student_train_transform,
 )
-from utils.transforms_512_strong import train_transform_class as teacher_train_transform
+from utils.transforms_512_light import train_transform_class as teacher_train_transform
 from utils.training import test
 from utils.generals import progress_bar
 from train_test_resnet import DualResDataset
@@ -196,31 +201,29 @@ def main(cfg: DictConfig) -> None:
     test_loader = DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
     calib_loader = DataLoader(calib_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
-    # ── Teacher (ResNet50 FP32 self-KD, 512x512, frozen) ─────────────────
-    # --- old ResNet18 teacher (kept for reference / rollback) ---
-    # teacher_path = os.path.join(cfg.models_dir, "resnet18_fp32_kd.pth")
-    teacher_path = os.path.join(cfg.models_dir, "resnet50_fp32_kd.pth")
+    # ── Teacher (ResNet18 FP32 KD, 512x512 light, frozen) ────────────────
+    teacher_path = os.path.join(cfg.models_dir, "resnet18_fp32_kd.pth")
+    # teacher_path = os.path.join(cfg.models_dir, "resnet50_fp32_kd.pth")
     if not os.path.exists(teacher_path):
         print(f"[ERROR] Teacher checkpoint not found: {teacher_path}")
-        print("Expected: resnet50_fp32_kd.pth (ResNet50 self-KD teacher from main.py).")
+        print("Expected: resnet18_fp32_kd.pth.")
         return
 
-    print(f"Loading ResNet50 teacher from: {teacher_path}")
-    # --- old ResNet18 teacher instantiation (kept for reference / rollback) ---
-    # teacher = ResNet18Classifier(nr_classes=cfg.nr_classes, pretrained=False)
-    teacher = ResNet50Classifier(nr_classes=cfg.nr_classes, pretrained=False)
+    print(f"Loading ResNet18 teacher from: {teacher_path}")
+    teacher = ResNet18Classifier(nr_classes=cfg.nr_classes, pretrained=False)
+    # teacher = ResNet50Classifier(nr_classes=cfg.nr_classes, pretrained=False)
     teacher.load_state_dict(torch.load(teacher_path, map_location="cpu"))
     teacher.to(device)
     teacher.eval()
     for param in teacher.parameters():
         param.requires_grad = False
-    print("Teacher loaded and frozen (512x512).")
+    print("Teacher loaded and frozen (512x512, light aug).")
 
     # ── Student (QuantTestResNet) ─────────────────────────────────────────
     tag = model_tag(WEIGHT_BITS, ACT_BITS)
     print("\n" + "=" * 50)
     print(f"Creating QuantTestResNet [{tag}] with KD")
-    print(f"Teacher: ResNet18 FP32 (512x512) | T={KD_TEMPERATURE}, alpha={KD_ALPHA}")
+    print(f"Teacher: ResNet18 FP32 (512x512 light) | T={KD_TEMPERATURE}, alpha={KD_ALPHA}")
     print("=" * 50)
     model = QuantTestResNet(
         nr_classes=cfg.nr_classes,
@@ -273,7 +276,7 @@ def main(cfg: DictConfig) -> None:
     print(f"BN freeze after epoch {BN_FREEZE_EPOCH}, patience={PATIENCE}")
     print("=" * 50)
 
-    criterion = nn.CrossEntropyLoss()  # used for validation loss only
+    criterion = nn.CrossEntropyLoss()  # validation only; checkpoint selection still uses val_f1
     optimizer = optim.Adam(model.parameters(), lr=QAT_LR, weight_decay=QAT_WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=QAT_EPOCHS)
 
@@ -357,7 +360,8 @@ def main(cfg: DictConfig) -> None:
         "best_val_f1": round(best_val_f1, 4),
         "checkpoint": qat_ckpt_path,
         "fp32_checkpoint": ckpt_path,
-        "teacher": "resnet18_fp32_kd.pth (512x512)",
+        "teacher": "resnet18_fp32_kd.pth (512x512 light)",
+        # "teacher": "resnet50_fp32_kd.pth (512x512)",
         "kd_temperature": KD_TEMPERATURE,
         "kd_alpha": KD_ALPHA,
         "input_size": [1, 3, 224, 224],
