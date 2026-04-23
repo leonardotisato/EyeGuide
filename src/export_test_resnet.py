@@ -1,12 +1,13 @@
 """
-Export test_resnet QAT checkpoint to QONNX.
+Export the canonical test_resnet QAT checkpoint to QONNX.
 
-Loads the QAT checkpoint saved by qat_test_resnet.py and exports to QONNX.
-No recalibration — the checkpoint already contains trained quantizer scales.
-BatchNorm nodes remain in the exported graph — FINN Streamline handles folding.
+Loads the checkpoint saved by the canonical KD-QAT pipeline in
+`src/qat_test_resnet.py` and exports it to QONNX. No recalibration is needed:
+the checkpoint already contains trained quantizer scales. BatchNorm nodes
+remain in the exported graph and are later folded by FINN Streamline.
 
 Run with:
-    bash run_export_test_resnet.sh
+    bash run.sh export_test_resnet
 """
 
 import os
@@ -45,18 +46,16 @@ def main(cfg: DictConfig) -> None:
 
     WEIGHT_BITS = int(OmegaConf.select(cfg, "weight_bits", default=8))
     ACT_BITS = int(OmegaConf.select(cfg, "act_bits", default=8))
-    use_kd = bool(OmegaConf.select(cfg, "kd", default=False))
 
     os.makedirs(cfg.results_dir, exist_ok=True)
 
     tag = model_tag(WEIGHT_BITS, ACT_BITS)
-    ckpt_suffix = "kd_qat" if use_kd else "qat"
 
     # ── Load QAT checkpoint ──────────────────────────────────────────────
-    ckpt_path = os.path.join(cfg.models_dir, f"test_resnet_{tag}_{ckpt_suffix}.pth")
+    ckpt_path = os.path.join(cfg.models_dir, f"test_resnet_{tag}_qat.pth")
     if not os.path.exists(ckpt_path):
         print(f"[ERROR] QAT checkpoint not found: {ckpt_path}")
-        print("Run qat_test_resnet.py or qat_kd_test_resnet.py first.")
+        print("Run src/qat_test_resnet.py first.")
         return
 
     model = QuantTestResNet(
@@ -71,8 +70,7 @@ def main(cfg: DictConfig) -> None:
     print(f"Loaded QAT checkpoint: {ckpt_path}")
 
     # ── Export to QONNX ──────────────────────────────────────────────────
-    onnx_tag = f"{tag}_kd" if use_kd else tag
-    export_path = os.path.join(cfg.models_dir, f"test_resnet_{onnx_tag}.onnx")
+    export_path = os.path.join(cfg.models_dir, f"test_resnet_{tag}.onnx")
     dummy_input = torch.randn(1, 3, SIZE, SIZE).to(device)
 
     print("\nExporting to QONNX ...")
@@ -106,7 +104,10 @@ def main(cfg: DictConfig) -> None:
         print("Skipping numerical validation (qonnx not available).")
 
     print(f"\nDone. Exported model: {export_path}")
-    print(f"Next: python src/finn_build/build_test_resnet.py --estimates-only --onnx models/test_resnet_{onnx_tag}.onnx")
+    print(
+        "Next: python src/finn_build/build_test_resnet.py "
+        f"--estimates-only --onnx models/test_resnet_{tag}.onnx"
+    )
 
 
 if __name__ == "__main__":
