@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-04-24 - test_resnet KD-QAT sweep
+
+First canonical QAT sweep from the current FP32 branch.
+
+### Pipeline (`src/qat_test_resnet.py`)
+- Teacher: `resnet18_from_resnet50_fp32_kd.pth` at 512, strong train, clean eval
+- Student init: `test_resnet_fp32_kd.pth`
+- Student architecture: `QuantTestResNet`
+- Student train input: 224, strong train transform
+- Student val/test/calib input: 224, clean eval transform
+- Training and validation use `DualResDataset`
+- Train and val loss: `alpha * CE + (1 - alpha) * KL`
+- `T=3.0`, `alpha=0.25`
+- `qat_lr=1e-5`, `weight_decay=1e-4`
+- `epochs=200`, `patience=50`
+- Quantizer calibration: all batches
+- BatchNorm freeze: epoch `5`
+- Selection on composite KD `val_loss`
+
+### Results
+
+| Run | Weighted F1 | Macro F1 | Accuracy | Best epoch | Best val loss | Val F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| `8w8a` KD-QAT | 83.91% | 82.10% | 84.21% | 78 | 1.4777 | 80.70% |
+| `6w6a` KD-QAT | **87.53%** | **84.74%** | **87.97%** | 92 | 1.7546 | 76.06% |
+| `4w4a` KD-QAT | 52.45% | 43.00% | 57.14% | 178 | 3.4506 | 54.56% |
+
+Checkpoints:
+- `models/test_resnet_8w8a_qat.pth`
+- `models/test_resnet_6w6a_qat.pth`
+- `models/test_resnet_4w4a_qat.pth`
+
 ## 2026-04-23 - test_resnet FP32 KD with aligned hypers
 
 Canonical FP32 baseline for the next QAT cycle.
