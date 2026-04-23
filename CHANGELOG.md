@@ -1,5 +1,124 @@
 # Changelog
 
+## 2026-04-23 - test_resnet FP32 KD with aligned hypers
+
+Canonical FP32 baseline for the next QAT cycle.
+
+### Pipeline (`src/train_test_resnet.py`)
+- Teacher: `resnet18_from_resnet50_fp32_kd.pth` at 512, strong train, clean eval
+- Student: `test_resnet.r160_in1k` at 224, strong train, clean eval
+- `T=3.0`, `alpha=0.25` (loss = `alpha * CE + (1 - alpha) * KL`)
+- `epochs=200`, `patience=50`
+- Composite KD `val_loss` selection
+
+### Results
+
+| Run | Weighted F1 | Macro F1 | Accuracy |
+|---|---:|---:|---:|
+| Aligned hypers | **86.16%** | **83.56%** | **86.47%** |
+
+
+## 2026-04-23 - test_resnet FP32 KD with new teacher (old hypers)
+
+Teacher swap only.
+
+### Pipeline (`src/train_test_resnet.py`)
+- Teacher: `resnet50_fp32_kd.pth` -> `resnet18_from_resnet50_fp32_kd.pth`
+- Teacher at 512, strong train, clean eval
+- Student: `test_resnet.r160_in1k` at 224, strong train, clean eval
+- `DualResDataset` for train and validation
+- Validation uses the training KD objective
+- Selection on composite KD `val_loss`
+- `T=4.0`, `alpha=0.5`
+- `epochs=100`, `patience=30`
+
+### Results
+
+| Run | Weighted F1 | Macro F1 | Accuracy |
+|---|---:|---:|---:|
+| New teacher + old hypers | 83.81% | 80.95% | 84.21% |
+
+
+## 2026-04-23 - Intermediate R18-from-R50 teacher
+
+New teacher distilled from `resnet50_fp32_kd.pth` into a ResNet18 at 512
+(`src/train_resnet18_from_resnet50_kd.py`).
+
+### Pipeline
+- Teacher and student both at 512
+- Strong train transforms, clean eval transforms
+- KD weights: `soft=0.75`, `ce=0.25`, `T=3.0`
+
+### Results
+
+| Model | Weighted F1 | Macro F1 | Accuracy |
+|---|---:|---:|---:|
+| `resnet18_from_resnet50_fp32_kd` | 90.73% | 89.38% | 90.98% |
+
+
+## 2026-04-23 - FP32 reruns with audit fixes (R50 direct teacher)
+
+Direct R50 -> test_resnet path rerun with the audit fixes applied.
+
+### Pipeline (`src/train_test_resnet.py`)
+- Teacher: `resnet50_fp32_kd.pth` at 512
+- Student: `test_resnet.r160_in1k` at 224
+- `DualResDataset` used for train and validation
+- Validation uses the training KD objective
+- Selection on composite KD `val_loss`
+- Teacher transforms match the teacher's own training setup (note that this was already true when we switched to resnet50 as teacher, but it wasn't when the teacher was the resnet18 (trained with light augmentation, fed as teacher with strong augmentation))
+
+### Results
+
+Only the student train augmentation was varied between the two runs.
+
+| Student train aug | Weighted F1 | Macro F1 |
+|---|---:|---:|
+| Light | 67.80% | 62.98% |
+| Strong | **79.15%** | **74.51%** |
+
+Cleaner pipeline lifts the R50-direct path to 79.15%, but stays below the old 81.7%. R50 is large relative to the `test_resnet` student — pursue a smaller intermediate teacher next.
+
+
+## 2026-04-22 - Pipeline audit and fixes
+
+Audit of the old `test_resnet` KD pipeline that produced the 81.7% FP32 baseline (see 2026-04-12 — Pivot to test_resnet.r160_in1k).
+
+### Defects identified
+- Selection used `val_f1` on a noisy validation split
+- KD validation loss was pure CE, not the composite KD loss used in training
+- Teacher inputs at validation did not match the teacher's own training setup
+
+### Fixes applied (`src/train_test_resnet.py`)
+- Selection switched to composite KD `val_loss`
+- Validation loss switched to the same composite KD loss used in training
+- `DualResDataset` extended to validation so teacher/student views stay aligned
+- Teacher validation transforms aligned to the teacher's training setup (clean eval)
+
+The old 81.7% FP32 / 86.18% 8w8a results are kept as historical references
+but are no longer baselines.
+
+
+## 2026-04-22 - Direct R50 -> test_resnet KD attempt
+
+R50 teacher plugged directly into the existing `test_resnet` KD pipeline with no pipeline changes.
+
+### Pipeline
+- Teacher: `resnet50_fp32_kd.pth` at 512, strong train, clean eval
+- Student: `test_resnet.r160_in1k` at 224, strong train, clean eval
+- `DualResDataset` for training; single-view validation
+- KD loss: `alpha*CE + (1-alpha)*KL`, `alpha=0.5`, `T=4.0`
+- Selection by `val_f1`
+- Validation loss: pure CE
+
+### Result
+
+| Run | Weighted F1 |
+|---|---:|
+| Direct R50 teacher | 71.95% |
+
+Below the old 81.7% FP32 baseline.
+
 ## 2026-04-21 — Stronger KD teacher (ResNet50)
 
 Replaced ResNet18 KD teacher with a ResNet50 KD.

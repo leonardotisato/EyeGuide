@@ -11,9 +11,8 @@ from utils.seed import set_seeds
 from utils.visualization import save_metrics_and_plot 
 from utils.losses import kd_loss
 from utils.training import train, train_knowledge_distillation, test
-from utils.model import ResNet18Classifier, ResNet50Classifier, VGG16Classifier, ViTClassifier, SwinClassifier
-from utils.dataset import FundusClsDataset, FundusClsDatasetZoom, PairedFundusDataset, prepare_dataframes
-# from utils.transforms_512_light import train_transform_class, test_transform_class
+from utils.model import ResNet50Classifier
+from utils.dataset import FundusClsDatasetZoom, PairedFundusDataset, prepare_dataframes
 from utils.transforms_512_strong import train_transform_class, test_transform_class
 from utils.generals import getOutFileName
 import numpy as np
@@ -92,24 +91,6 @@ def main(cfg: DictConfig):
         random_seed = cfg.RANDOM_SEED
     )
 
-    train_dataset_student = FundusClsDataset(
-        data_csv=train_df,
-        train=True,
-        transform=train_transform,
-    )
-
-    val_dataset_student = FundusClsDataset(
-        data_csv=val_df,
-        train=False,
-        transform=val_transform,
-    )
-
-    test_dataset_student = FundusClsDataset(
-        data_csv=test_df,
-        train=False,
-        transform=test_transform,
-    )
-
     train_dataset_kd = PairedFundusDataset(
         df=train_df,
         teacher_transform=train_transform,
@@ -152,22 +133,6 @@ def main(cfg: DictConfig):
         pin_memory=True
     )
 
-    train_loader_student = DataLoader(
-        train_dataset_student,
-        batch_size=cfg.batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True
-    )
-
-    val_loader_student = DataLoader(
-        val_dataset_student,
-        batch_size=cfg.batch_size,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True
-    )
-
     train_loader_kd = DataLoader(
         train_dataset_kd,
         batch_size=cfg.batch_size,
@@ -192,14 +157,6 @@ def main(cfg: DictConfig):
         pin_memory=True
     )
 
-    test_loader_student = DataLoader(
-        test_dataset_student,
-        batch_size=cfg.batch_size,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True
-    )
-
     test_loader_kd = DataLoader(
         test_dataset_kd,
         batch_size=cfg.batch_size,
@@ -210,97 +167,17 @@ def main(cfg: DictConfig):
     
 
     # ------------------ MODELS ------------------
-    # --- old ResNet18 teacher (kept for reference / rollback) ---
-    # teacher = ResNet18Classifier(
-    #     nr_classes=cfg.nr_classes,
-    #     dropout=0.5,
-    #     pretrained=True,
-    # )
     teacher = ResNet50Classifier(
         nr_classes=cfg.nr_classes,
         dropout=0.5,
         pretrained=True,
     )
 
-    # --- baseline student (non-KD) removed from this run to save compute.
-    #     We only need teacher (step 1) + student_kd (step 2, becomes the new
-    #     teacher for test_resnet). Uncomment if a non-KD ResNet50 baseline is
-    #     needed for comparison. ---
-    # student = ResNet18Classifier(
-    #     nr_classes=cfg.nr_classes,
-    #     dropout=0.5,
-    #     pretrained=True,
-    # )
-    # student = ResNet50Classifier(
-    #     nr_classes=cfg.nr_classes,
-    #     dropout=0.5,
-    #     pretrained=True,
-    # )
-
-    # --- old ResNet18 student_kd (kept for reference / rollback) ---
-    # student_kd = ResNet18Classifier(
-    #     nr_classes=cfg.nr_classes,
-    #     dropout=0.5,
-    #     pretrained=True,
-    # )
     student_kd = ResNet50Classifier(
         nr_classes=cfg.nr_classes,
         dropout=0.5,
         pretrained=True,
     )
-    '''teacher = VGG16Classifier(
-    nr_classes=cfg.nr_classes,
-    dropout=0.5,
-    pretrained=True,
-    )
-
-    student = VGG16Classifier(
-        nr_classes=cfg.nr_classes,
-        dropout=0.5,
-        pretrained=True,
-    )
-
-    student_kd = VGG16Classifier(
-        nr_classes=cfg.nr_classes,
-        dropout=0.5,
-        pretrained=True,
-    )'''
-    '''teacher = ViTClassifier(
-    nr_classes=cfg.nr_classes,
-    dropout=0.5,
-    pretrained=True,
-    )
-
-    student = ViTClassifier(
-        nr_classes=cfg.nr_classes,
-        dropout=0.5,
-        pretrained=True,
-    )
-
-    student_kd = ViTClassifier(
-        nr_classes=cfg.nr_classes,
-        dropout=0.5,
-        pretrained=True,
-    )'''
-    '''teacher = SwinClassifier(
-    nr_classes=cfg.nr_classes,
-    dropout=0.5,
-    pretrained=True,
-    )
-
-    student = SwinClassifier(
-        nr_classes=cfg.nr_classes,
-        dropout=0.5,
-        pretrained=True,
-    )
-
-    student_kd = SwinClassifier(
-        nr_classes=cfg.nr_classes,
-        dropout=0.5,
-        pretrained=True,
-    )'''
-
-
 
     # ------------------ Teacher ------------------
     print("\n================ TRAIN TEACHER =================")
@@ -324,37 +201,8 @@ def main(cfg: DictConfig):
         val_f1s=plots_t["val_f1s"],
         results_dir=cfg.results_dir,
     )
-
-    # ------------------ student (baseline, non-KD) ------------------
-    # Disabled for the ResNet50 KD teacher-training run — we only need
-    # teacher (step 1) and student_kd (step 2). Re-enable by uncommenting if a
-    # non-KD ResNet50 baseline is needed for comparison.
-    # print("\n================ TRAIN BASELINE =================")
-    # student, metrics_s, plots_s = train(
-    #     model=student,
-    #     train_loader=train_loader_student,
-    #     valid_loader=val_loader_student,
-    #     epochs=cfg.n_epochs,
-    #     learning_rate=cfg.student_lr,
-    #     weight_decay=cfg.weight_decay,
-    #     device=device,
-    #     exp_name = exp_name,
-    #     model_type = 'student',
-    #     grad_clip_value=5.0,
-    # )
-    #
-    # save_metrics_and_plot(
-    #     name="student",
-    #     train_losses=plots_s["train_losses"],
-    #     val_losses=plots_s["val_losses"],
-    #     val_f1s=plots_s["val_f1s"],
-    #     results_dir=cfg.results_dir,
-    # )
-
     # ------------------ Student supervised by teacher ------------------
     print("\n================ TRAIN MODEL WITH KNOWLEDGE DISTILLATION =================")
-
-
     student_kd, metrics_skd, plots_skd = train_knowledge_distillation(
         teacher=teacher,
         student=student_kd,
@@ -381,12 +229,6 @@ def main(cfg: DictConfig):
 
     # ------------------ SAVE MODELS ------------------
     print("\n================ SAVING MODELS =================")
-    # --- old exp_name-tagged saves (kept for reference) ---
-    # torch.save(teacher.state_dict(), os.path.join(cfg.models_dir, f"teacher_{exp_name}.pth"))
-    # torch.save(student.state_dict(), os.path.join(cfg.models_dir, f"student_{exp_name}.pth"))
-    # torch.save(student_kd.state_dict(), os.path.join(cfg.models_dir, f"student_kd_{exp_name}.pth"))
-    # Fixed names so downstream scripts (train_test_resnet.py, qat_kd_test_resnet.py)
-    # can pick up the artifacts without renaming by hand.
     torch.save(teacher.state_dict(), os.path.join(cfg.models_dir, "resnet50_fp32_teacher.pth"))
     torch.save(student_kd.state_dict(), os.path.join(cfg.models_dir, "resnet50_fp32_kd.pth"))
     print(f"Models saved in: {cfg.models_dir}")
@@ -394,7 +236,6 @@ def main(cfg: DictConfig):
     # ------------------ SAVE METRICS ------------------
     summary_metrics = {
         "teacher": metrics_t,
-        # "student": metrics_s,   # baseline student disabled in this run
         "student_kd": metrics_skd,
         "config": {
             "nr_classes": cfg.nr_classes,
@@ -416,11 +257,7 @@ def main(cfg: DictConfig):
     with open(summary_path_csv, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["model", "accuracy", "f1", "precision", "recall"])
-        for name, m in [
-            ("teacher", metrics_t),
-            # ("student", metrics_s),   # baseline student disabled in this run
-            ("student_kd", metrics_skd),
-        ]:
+        for name, m in [("teacher", metrics_t), ("student_kd", metrics_skd)]:
             writer.writerow([name, m["accuracy"], m["f1"], m["precision"], m["recall"]])
 
     print(
@@ -438,16 +275,6 @@ def main(cfg: DictConfig):
         bootstrap = True,
         savedir=cfg.results_dir
     )
-    # --- baseline student test disabled in this run ---
-    # print("\n---- Student (no KD) ----")
-    # metrics_student = test(
-    #     model=student,
-    #     test_loader=test_loader_student,
-    #     device=device,
-    #     model_type="student",
-    #     bootstrap = True,
-    #     savedir=cfg.results_dir
-    # )
     print("\n---- Student with KD ----")
     metrics_kd = test(
         model=student_kd,
@@ -458,16 +285,11 @@ def main(cfg: DictConfig):
         savedir=cfg.results_dir
     )
     print("\n================ TESTING COMPLETED =================")
-    # save metrics in yaml
+    # save test summaries in JSON
     test_summary_path = os.path.join(cfg.results_dir, "test_summary_teacher.json")
     metrics_teacher = convert_dict(metrics_teacher)
     with open(test_summary_path, 'w') as fp:
         json.dump(metrics_teacher, fp)
-    # --- baseline student test-summary save disabled in this run ---
-    # test_summary_path = os.path.join(cfg.results_dir, "test_summary_student.json")
-    # metrics_student = convert_dict(metrics_student)
-    # with open(test_summary_path, 'w') as fp:
-    #     json.dump(metrics_student, fp)
     test_summary_path = os.path.join(cfg.results_dir, "test_summary_kd.json")
     metrics_kd = convert_dict(metrics_kd)
     with open(test_summary_path, 'w') as fp:

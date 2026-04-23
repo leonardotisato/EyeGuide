@@ -3,11 +3,12 @@
 # Usage: bash run.sh <command> [args...]
 #
 # Commands:
-#   train_teacher           ResNet50 KD teacher training (main.py) — produces resnet50_fp32_kd.pth
-#   train_test_resnet       Current FP32 rerun for test_resnet (R18 KD teacher, light aug, val-loss selection)
+#   train_teacher           Historical ResNet50 KD teacher stack (main.py) — produces resnet50_fp32_kd.pth
+#   train_test_resnet       Canonical FP32 baseline for test_resnet (upgraded R18 teacher, sound KD pipeline)
+#   train_resnet18_from_resnet50_kd  Distill resnet50_fp32_kd.pth into the upgraded full-image ResNet18 teacher
 #   eval_teacher_224        Validate ResNet18 teacher at 224x224
-#   qat_test_resnet         Plain QAT for test_resnet (current script uses 224 light aug)
-#   qat_kd_test_resnet      QAT+KD for test_resnet (R18 teacher 512 light, student 224 light)
+#   qat_test_resnet         Plain QAT for test_resnet from the canonical FP32 baseline
+#   qat_kd_test_resnet      Legacy KD-QAT path for test_resnet (pending redesign around the new teacher/baseline)
 #   export_test_resnet      QONNX export for test_resnet
 #   train_custom_net        Canonical FP32 training for custom_net (m=3, strong aug, weighted CE)
 #   qat_custom_net          QAT for CustomSmallNet
@@ -34,6 +35,7 @@ shift
 case "$CMD" in
     train_teacher)          SCRIPT="src/main.py" ;;
     train_test_resnet)      SCRIPT="src/train_test_resnet.py" ;;
+    train_resnet18_from_resnet50_kd) SCRIPT="src/train_resnet18_from_resnet50_kd.py" ;;
     eval_teacher_224)       SCRIPT="src/eval_teacher_224.py" ;;
     qat_test_resnet)        SCRIPT="src/qat_test_resnet.py" ;;
     qat_kd_test_resnet)     SCRIPT="src/qat_kd_test_resnet.py" ;;

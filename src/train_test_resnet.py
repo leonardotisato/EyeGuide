@@ -1,7 +1,7 @@
 """
 Canonical FP32 fine-tuning of test_resnet.r160_in1k for the active project flow.
 
-This script implements the current consistency-first rerun:
+This script implements the current canonical sound baseline:
 - Knowledge Distillation from the upgraded ResNet18 KD teacher
   (`resnet18_from_resnet50_fp32_kd.pth`, 512x512 full-image strong train domain)
 - Strong 224x224 student training augmentation
@@ -37,7 +37,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 from utils.dataset import FundusClsDataset, prepare_dataframes, safe_pil_read
 from utils.generals import progress_bar
 from utils.model import ResNet18Classifier
-# from utils.model import ResNet50Classifier
 from utils.seed import set_seeds
 from utils.training import test
 from utils.transforms_224_light import (
@@ -53,7 +52,6 @@ from utils.transforms_512_strong import (
 
 
 LR = 1e-4
-# LR = 5e-5
 EPOCHS = 200
 WEIGHT_DECAY = 1e-4
 PATIENCE = 50
@@ -223,14 +221,12 @@ def main(cfg: DictConfig) -> None:
     )
 
     teacher_path = os.path.join(cfg.models_dir, "resnet18_from_resnet50_fp32_kd.pth")
-    # teacher_path = os.path.join(cfg.models_dir, "resnet50_fp32_kd.pth")
     if not os.path.exists(teacher_path):
         print(f"[ERROR] Teacher checkpoint not found: {teacher_path}")
         return
 
     print(f"Loading teacher from: {teacher_path}")
     teacher = ResNet18Classifier(nr_classes=cfg.nr_classes, pretrained=False)
-    # teacher = ResNet50Classifier(nr_classes=cfg.nr_classes, pretrained=False)
     teacher.load_state_dict(torch.load(teacher_path, map_location="cpu"))
     teacher.to(device)
     teacher.eval()
@@ -257,9 +253,8 @@ def main(cfg: DictConfig) -> None:
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
-    # best_val_f1 = -1.0
     best_val_loss = float("inf")
-    best_val_f1 = -1.0  # still tracked for logging/reporting
+    best_val_f1 = -1.0
     best_state = None
     patience_counter = 0
     best_epoch = -1
@@ -312,16 +307,6 @@ def main(cfg: DictConfig) -> None:
                     best_epoch,
                 ]
             )
-
-        # Selection by val_f1 (noisy on small val set) — replaced by val_loss below.
-        # if val_f1 > best_val_f1:
-        #     best_val_f1 = val_f1
-        #     best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-        #     best_epoch = epoch
-        #     patience_counter = 0
-        #     print(f"  -> New best val F1: {val_f1:.2f}% (epoch {epoch})")
-        # else:
-        #     patience_counter += 1
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_val_f1 = val_f1
@@ -367,7 +352,6 @@ def main(cfg: DictConfig) -> None:
         "best_val_loss": round(best_val_loss, 4),
         "checkpoint": ckpt_path,
         "teacher": "resnet18_from_resnet50_fp32_kd.pth (512x512 full-image strong train / test eval)",
-        # "teacher": "resnet50_fp32_kd.pth",
         "student_resolution": 224,
         "teacher_resolution": 512,
         "input_size": [1, 3, 224, 224],
