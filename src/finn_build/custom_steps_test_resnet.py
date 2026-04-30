@@ -2,11 +2,11 @@
 Custom FINN build steps for the fundus QAT test_resnet.
 
 Hybrid of ResNet18 pipeline (residual connections) and CustomSmallNet pipeline
-(GlobalAvgPool handling with AbsorbScalarMulIntoMatMul).
+(GlobalAvgPool handling with custom QuantAvgPool conversion and HW lowering).
 
 Differences from ResNet18 pipeline:
   - Stem MaxPool present → MoveMulPastMaxPool in streamline, InferPool in to-HW step
-  - GlobalAvgPool → needs InferGlobalAccPoolLayer + AbsorbScalarMulIntoMatMul
+  - GlobalAvgPool → needs InferGlobalAccPoolLayer
   - Downsample TruncAvgPool2d → ConvertAvgPoolTruncToQuantAvgPool + InferPool
   - Otherwise identical residual handling (MoveLinearPastEltwiseAdd, InferAddStreamsLayer, etc.)
 
@@ -26,10 +26,6 @@ from custom_steps_resnet18 import (
     FixThresholdDataTypes,
     FundusPreProc,  # noqa: F401
 )
-from custom_steps_custom_net import (
-    AbsorbScalarMulIntoMatMul,
-)
-
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.datatype import DataType
 from qonnx.util.cleanup import cleanup_model
@@ -339,6 +335,55 @@ def step_test_resnet_lower(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
 # ---------------------------------------------------------------------------
 # Step 6: Convert to HW layers
 # ---------------------------------------------------------------------------
+def _get_test_resnet_to_hw_transformations():
+    to_hw_transformations = [
+        DoubleToSingleFloat(),
+        InferDataTypes(),
+        SortGraph(),
+        InferShapes(),
+        # Residual handling: move transposes past Add joins
+        MoveTransposePastJoinAdd(),
+        AbsorbTransposeIntoMultiThreshold(),
+        AbsorbConsecutiveTransposes(),
+        # Convert MaxPool BEFORE InferAddStreamsLayer.
+        # InferAddStreamsLayer checks that Add inputs have integer FINN DataTypes.
+        # For layer1 (identity skip), the skip tensor is the stem MaxPool output.
+        # If MaxPoolNHWC(k=3,s=2) is still non-HW when InferAddStreamsLayer runs,
+        # InferDataTypes cannot propagate integer dtype through it → layer1 Add stays non-HW.
+        # InferStreamingMaxPool handles k=s only; InferPool handles k≠s (stem k=3,s=2)
+        # via Im2Col+Pool_Batch and also converts QuantAvgPool2d from downsample paths.
+        InferStreamingMaxPool(),
+        InferPool(),
+        # InferPool on NCHW MaxPool preserves the original layout by inserting
+        # output Transpose nodes. For the stem pool, those transposes sit right
+        # before the first residual fork. Push them into the branches so inverse
+        # transpose pairs can collapse before partitioning.
+        MoveTransposePastFork(),
+        AbsorbConsecutiveTransposes(),
+        # Convert residual Add to HW (now all pool outputs have integer FINN DataTypes)
+        InferAddStreamsLayer(),
+        # GlobalAvgPool -> GlobalAccPool HW (inserts 1/N Mul)
+        InferGlobalAccPoolLayer(),
+        # Keep the post-GAP scalar separate in the test_resnet FINN flow.
+        # Absorbing it into the FC MatMul weights can turn the first FC MVAU
+        # weights into FLOAT32, which breaks the streamed HLS MVAU path
+        # (internal_decoupled mem_mode) during IP generation.
+        RoundAndClipThresholds(),
+        FixThresholdDataTypes(),
+        InferThresholdingLayer(),
+        InferConvInpGen(),
+        InferQuantizedMatrixVectorActivation(),
+        # Duplicate streams for residual forks
+        InferDuplicateStreamsLayer(),
+        InferChannelwiseLinearLayer(),
+        InferLabelSelectLayer(),
+        AbsorbConsecutiveTransposes(),
+        AbsorbTransposeIntoFlatten(),
+        RemoveCNVtoFCFlatten(),
+    ]
+    return to_hw_transformations
+
+
 def step_test_resnet_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     # Post-lower streamline
     post_lower_streamline = [
@@ -372,49 +417,7 @@ def step_test_resnet_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
 
     non_hw_pre = graph_summary(model, "before to_hw")
 
-    to_hw_transformations = [
-        DoubleToSingleFloat(),
-        InferDataTypes(),
-        SortGraph(),
-        InferShapes(),
-        # Residual handling: move transposes past Add joins
-        MoveTransposePastJoinAdd(),
-        AbsorbTransposeIntoMultiThreshold(),
-        AbsorbConsecutiveTransposes(),
-        # Convert MaxPool BEFORE InferAddStreamsLayer.
-        # InferAddStreamsLayer checks that Add inputs have integer FINN DataTypes.
-        # For layer1 (identity skip), the skip tensor is the stem MaxPool output.
-        # If MaxPoolNHWC(k=3,s=2) is still non-HW when InferAddStreamsLayer runs,
-        # InferDataTypes cannot propagate integer dtype through it → layer1 Add stays non-HW.
-        # InferStreamingMaxPool handles k=s only; InferPool handles k≠s (stem k=3,s=2)
-        # via Im2Col+Pool_Batch and also converts QuantAvgPool2d from downsample paths.
-        InferStreamingMaxPool(),
-        InferPool(),
-        # InferPool on NCHW MaxPool preserves the original layout by inserting
-        # output Transpose nodes. For the stem pool, those transposes sit right
-        # before the first residual fork. Push them into the branches so inverse
-        # transpose pairs can collapse before partitioning.
-        MoveTransposePastFork(),
-        AbsorbConsecutiveTransposes(),
-        # Convert residual Add to HW (now all pool outputs have integer FINN DataTypes)
-        InferAddStreamsLayer(),
-        # GlobalAvgPool -> GlobalAccPool HW (inserts 1/N Mul)
-        InferGlobalAccPoolLayer(),
-        # Absorb the 1/N Mul into FC MatMul weights
-        AbsorbScalarMulIntoMatMul(),
-        RoundAndClipThresholds(),
-        FixThresholdDataTypes(),
-        InferThresholdingLayer(),
-        InferConvInpGen(),
-        InferQuantizedMatrixVectorActivation(),
-        # Duplicate streams for residual forks
-        InferDuplicateStreamsLayer(),
-        InferChannelwiseLinearLayer(),
-        InferLabelSelectLayer(),
-        AbsorbConsecutiveTransposes(),
-        AbsorbTransposeIntoFlatten(),
-        RemoveCNVtoFCFlatten(),
-    ]
+    to_hw_transformations = _get_test_resnet_to_hw_transformations()
 
     model.set_tensor_datatype(model.graph.input[0].name, DataType["UINT8"])
 

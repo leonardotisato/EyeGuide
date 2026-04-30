@@ -22,6 +22,9 @@
 
 set -e
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GPU_FLAGS=(--gpus all)
+
 if [ -z "$1" ]; then
     echo "Usage: bash run.sh <command> [args...]"
     echo "Run 'bash run.sh --help' to see available commands."
@@ -57,8 +60,14 @@ case "$CMD" in
         ;;
 esac
 
-docker run --rm -it --gpus all --shm-size=8g \
-  -v /mnt/c/Users/leona/Desktop/POLIMI/Programmi/NECST/HPPS:/app \
+case "$CMD" in
+    export_test_resnet|export_custom_net|export_resnet18|export_mobilenetv1)
+        GPU_FLAGS=()
+        ;;
+esac
+
+docker run --rm -it "${GPU_FLAGS[@]}" --shm-size=8g \
+  -v "$REPO_DIR:/app" \
   -w /app \
   hpps_image \
   python "$SCRIPT" "$@"

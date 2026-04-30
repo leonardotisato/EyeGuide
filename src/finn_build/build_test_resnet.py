@@ -34,6 +34,7 @@ try:
     from finn.builder.build_dataflow_config import (
         DataflowBuildConfig,
         DataflowOutputType,
+        LargeFIFOMemStyle,
         ShellFlowType,
     )
     from finn.builder.build_dataflow import build_dataflow_cfg
@@ -176,6 +177,8 @@ cfg = DataflowBuildConfig(
     shell_flow_type=shell_flow_type,
     target_fps=args.target_fps,
     folding_config_file=args.folding_config,
+    split_large_fifos=True,
+    default_swg_exception=True,
     generate_outputs=generate_outputs,
     save_intermediate_models=True,
 )
