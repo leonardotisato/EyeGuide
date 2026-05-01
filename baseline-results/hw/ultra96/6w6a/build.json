@@ -1,6 +1,8 @@
 {
   "model": "test_resnet_6w6a",
   "board": "Ultra96",
+  "quantization": "6w6a",
+  "status": "success",
   "build_dir": "build_finn_test_resnet_6w6a",
   "source_reports": {
     "post_synth_resources": "build_finn_test_resnet_6w6a/report/post_synth_resources.json",
@@ -43,3 +45,4 @@
     "BRAM_18K_equivalent is computed as 2 * BRAM_36K + BRAM_18K."
   ]
 }
+
