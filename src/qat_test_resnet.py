@@ -44,7 +44,6 @@ from utils.dataset import FundusClsDataset, prepare_dataframes
 from utils.generals import progress_bar
 from utils.model import ResNet18Classifier
 from utils.quant_test_resnet import QuantTestResNet, load_test_resnet_weights, model_tag
-from utils.reporting import build_qat_test_resnet_report
 from utils.seed import set_seeds
 from utils.training import test
 from utils.transforms_224_light import (
@@ -401,23 +400,23 @@ def main(cfg: DictConfig) -> None:
     )
     print(f"QAT test metrics: {test_metrics}")
 
-    report = build_qat_test_resnet_report(
-        weight_bits=weight_bits,
-        act_bits=act_bits,
-        n_params=n_params,
-        epochs=best_epoch + 1,
-        best_val_f1=round(best_val_f1, 4),
-        best_val_loss=round(best_val_loss, 4),
-        checkpoint=qat_ckpt_path,
-        student_init_checkpoint=student_init_checkpoint,
-        teacher="resnet18_from_resnet50_fp32_kd.pth (512x512 full-image strong train / test eval)",
-        student_resolution=224,
-        teacher_resolution=512,
-        input_size=[1, 3, 224, 224],
-        kd_temperature=KD_TEMPERATURE,
-        kd_alpha=KD_ALPHA,
-        test_metrics=test_metrics,
-    )
+    report = {
+        "weight_bits": weight_bits,
+        "act_bits": act_bits,
+        "n_params": n_params,
+        "epochs": best_epoch + 1,
+        "best_val_f1": round(best_val_f1, 4),
+        "best_val_loss": round(best_val_loss, 4),
+        "checkpoint": qat_ckpt_path,
+        "student_init_checkpoint": student_init_checkpoint,
+        "teacher": "resnet18_from_resnet50_fp32_kd.pth (512x512 full-image strong train / test eval)",
+        "student_resolution": 224,
+        "teacher_resolution": 512,
+        "input_size": [1, 3, 224, 224],
+        "kd_temperature": KD_TEMPERATURE,
+        "kd_alpha": KD_ALPHA,
+        "test_metrics": test_metrics,
+    }
     report["student_init_mode"] = student_init_mode
     report_path = os.path.join(cfg.results_dir, f"qat_test_resnet_{tag}_report.json")
     with open(report_path, "w") as f:
