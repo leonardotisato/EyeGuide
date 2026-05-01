@@ -1,4 +1,4 @@
-"""Board-side throughput wrapper for FINN-generated test_resnet overlays."""
+"""Board-side measured-throughput wrapper for FINN-generated test_resnet overlays."""
 
 import argparse
 import ast
@@ -12,6 +12,26 @@ from utils.reporting import to_jsonable
 
 DEFAULT_BITFILE_NAME = "finn-accel.bit"
 DEFAULT_METRICS_FILENAME = "nw_metrics.txt"
+
+
+OVERLAY_METRIC_MAP = {
+    "runtime_ms": "runtime[ms]",
+    "throughput_images_per_s": "throughput[images/s]",
+    "dram_in_bandwidth_mb_s": "DRAM_in_bandwidth[MB/s]",
+    "dram_out_bandwidth_mb_s": "DRAM_out_bandwidth[MB/s]",
+    "fclk_mhz": "fclk[mhz]",
+    "batch_size": "batch_size",
+}
+
+
+HOST_OVERHEAD_METRIC_MAP = {
+    "fold_input_ms": "fold_input[ms]",
+    "pack_input_ms": "pack_input[ms]",
+    "copy_input_data_to_device_ms": "copy_input_data_to_device[ms]",
+    "copy_output_data_from_device_ms": "copy_output_data_from_device[ms]",
+    "unpack_output_ms": "unpack_output[ms]",
+    "unfold_output_ms": "unfold_output[ms]",
+}
 
 
 def build_parser():
@@ -101,8 +121,35 @@ def load_driver_metrics(metrics_path):
     return raw_metrics
 
 
+def _extract_metric_group(raw_metrics, metric_map):
+    """Return a renamed subset of driver metrics using the provided key map."""
+
+    return {
+        public_key: raw_metrics[source_key]
+        for public_key, source_key in metric_map.items()
+        if source_key in raw_metrics
+    }
+
+
+def _extract_external_weight_bandwidths(raw_metrics):
+    """Collect measured external-weight bandwidth metrics, if any are present."""
+
+    prefix = "DRAM_extw_"
+    suffix = "_bandwidth[MB/s]"
+    extw_metrics = {}
+    for raw_key, value in raw_metrics.items():
+        if raw_key.startswith(prefix) and raw_key.endswith(suffix):
+            weight_name = raw_key[len(prefix):-len(suffix)]
+            extw_metrics[weight_name] = value
+    return extw_metrics
+
+
 def build_benchmark_report(raw_metrics, paths, args):
     """Normalize raw driver throughput metrics into the tracked JSON schema."""
+
+    overlay_metrics = _extract_metric_group(raw_metrics, OVERLAY_METRIC_MAP)
+    host_overhead = _extract_metric_group(raw_metrics, HOST_OVERHEAD_METRIC_MAP)
+    external_weight_bandwidths = _extract_external_weight_bandwidths(raw_metrics)
 
     return {
         "model": "test_resnet",
@@ -112,14 +159,9 @@ def build_benchmark_report(raw_metrics, paths, args):
         "platform": args.platform,
         "device": args.device,
         "batch_size": args.batchsize,
-        "throughput_metrics": to_jsonable(raw_metrics),
-        "summary": {
-            "runtime_ms": raw_metrics.get("runtime[ms]"),
-            "throughput_images_per_s": raw_metrics.get("throughput[images/s]"),
-            "fclk_mhz": raw_metrics.get("fclk[mhz]"),
-            "dram_in_bandwidth_mb_s": raw_metrics.get("DRAM_in_bandwidth[MB/s]"),
-            "dram_out_bandwidth_mb_s": raw_metrics.get("DRAM_out_bandwidth[MB/s]"),
-        },
+        "measured_overlay_metrics": to_jsonable(overlay_metrics),
+        "host_overhead_ms": to_jsonable(host_overhead),
+        "external_weight_bandwidth_mb_s": to_jsonable(external_weight_bandwidths),
     }
 
 
