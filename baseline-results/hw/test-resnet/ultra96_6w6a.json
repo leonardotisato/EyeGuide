@@ -1,0 +1,53 @@
+{
+  "model": "test_resnet_6w6a",
+  "board": "Ultra96",
+  "build_dir": "build_finn_test_resnet_6w6a",
+  "source_reports": {
+    "post_synth_resources": "build_finn_test_resnet_6w6a/report/post_synth_resources.json",
+    "post_route_timing": "build_finn_test_resnet_6w6a/report/post_route_timing.rpt",
+    "estimate_network_performance": "build_finn_test_resnet_6w6a/report/estimate_network_performance.json"
+  },
+  "post_synth_resources": {
+    "LUT": 60805,
+    "FF": 66615,
+    "DSP": 15,
+    "URAM": 0,
+    "BRAM_36K": 145,
+    "BRAM_18K": 85,
+    "BRAM_18K_equivalent": 375
+  },
+  "post_route_timing": {
+    "target_clock_period_ns": 10.0,
+    "setup": {
+      "failing_endpoints": 0,
+      "worst_slack_ns": 2.262,
+      "total_violation_ns": 0.0
+    },
+    "hold": {
+      "failing_endpoints": 0,
+      "worst_slack_ns": 0.01,
+      "total_violation_ns": 0.0
+    },
+    "pulse_width": {
+      "failing_endpoints": 0,
+      "worst_slack_ns": 3.5,
+      "total_violation_ns": 0.0
+    }
+  },
+  "estimated_performance": {
+    "critical_path_cycles": 163731176,
+    "max_cycles": 57802752,
+    "max_cycles_node_name": "MVAU_rtl_9",
+    "estimated_throughput_fps": 1.7300214356575965,
+    "estimated_latency_ns": 1637311760.0
+  },
+  "artifacts": {
+    "bitfile": "build_finn_test_resnet_6w6a/bitfile/finn-accel.bit",
+    "hardware_handoff": "build_finn_test_resnet_6w6a/bitfile/finn-accel.hwh",
+    "driver_dir": "build_finn_test_resnet_6w6a/driver"
+  },
+  "notes": [
+    "This file tracks actual post-synth/post-route numbers, not only FINN analytical estimates.",
+    "BRAM_18K_equivalent is computed as 2 * BRAM_36K + BRAM_18K."
+  ]
+}

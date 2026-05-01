@@ -1,0 +1,131 @@
+{
+  "model": {
+    "name": "test_resnet_6w6a_qat",
+    "family": "test_resnet_qat",
+    "checkpoint": "models/test_resnet_6w6a_qat.pth",
+    "report_path": "baseline-results/qat-test-resnet/6w6a/test_summary_6w6a.json",
+    "eval_profile": "test_resnet_qat_224",
+    "weight_bits": 6,
+    "act_bits": 6
+  },
+  "metrics": {
+    "point_metrics_pct": {
+      "accuracy_overall": 87.96992481203007,
+      "precision_weighted": 88.79641411220359,
+      "recall_weighted": 87.96992481203007,
+      "f1_weighted": 87.53375914050898
+    },
+    "bootstrap_ci_pct": {
+      "accuracy_overall": {
+        "mean": 88.06691729323308,
+        "lower": 82.70676691729322,
+        "upper": 93.23308270676691
+      },
+      "precision_macro": {
+        "mean": 89.37411520703817,
+        "lower": 83.06240680736366,
+        "upper": 94.83644957983192
+      },
+      "recall_macro": {
+        "mean": 82.9297416886446,
+        "lower": 75.12668728558619,
+        "upper": 90.53773446151716
+      },
+      "f1_macro": {
+        "mean": 84.82153756727224,
+        "lower": 77.15225836740306,
+        "upper": 91.70665282822196
+      }
+    },
+    "class_one_vs_rest_bootstrap_ci_pct": {
+      "healthy": {
+        "accuracy": {
+          "mean": 96.22406015037593,
+          "lower": 93.23308270676691,
+          "upper": 99.24812030075188
+        },
+        "precision": {
+          "mean": 90.35920396691935,
+          "lower": 81.81818181818183,
+          "upper": 97.91772959183673
+        },
+        "recall": {
+          "mean": 100.0,
+          "lower": 100.0,
+          "upper": 100.0
+        },
+        "f1": {
+          "mean": 94.88718162066961,
+          "lower": 90.0,
+          "upper": 98.94791101465003
+        }
+      },
+      "melanoma": {
+        "accuracy": {
+          "mean": 94.02406015037593,
+          "lower": 89.47368421052632,
+          "upper": 97.74436090225564
+        },
+        "precision": {
+          "mean": 100.0,
+          "lower": 100.0,
+          "upper": 100.0
+        },
+        "recall": {
+          "mean": 69.42405802539807,
+          "lower": 50.0,
+          "upper": 85.71428571428571
+        },
+        "f1": {
+          "mean": 81.618111275775,
+          "lower": 66.66666666666666,
+          "upper": 92.3076923076923
+        }
+      },
+      "nevus": {
+        "accuracy": {
+          "mean": 91.00300751879699,
+          "lower": 85.71428571428571,
+          "upper": 95.48872180451127
+        },
+        "precision": {
+          "mean": 82.09542847424814,
+          "lower": 70.37037037037037,
+          "upper": 92.00392156862746
+        },
+        "recall": {
+          "mean": 93.09057057469332,
+          "lower": 84.77842809364549,
+          "upper": 100.0
+        },
+        "f1": {
+          "mean": 87.12988700850653,
+          "lower": 79.11960132890366,
+          "upper": 93.47896668548843
+        }
+      },
+      "chrpe": {
+        "accuracy": {
+          "mean": 94.88270676691728,
+          "lower": 90.97744360902256,
+          "upper": 98.49624060150376
+        },
+        "precision": {
+          "mean": 85.0418283869852,
+          "lower": 62.5,
+          "upper": 100.0
+        },
+        "recall": {
+          "mean": 69.20433815448696,
+          "lower": 42.857142857142854,
+          "upper": 92.85714285714286
+        },
+        "f1": {
+          "mean": 75.65097036413785,
+          "lower": 54.54545454545454,
+          "upper": 92.3170731707317
+        }
+      }
+    }
+  }
+}
