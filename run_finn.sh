@@ -6,6 +6,11 @@ set -e
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANDIDATES=()
 
+# Default Xilinx toolchain location/version for the shared FINN build host.
+# Allow callers to override these before launching the script.
+: "${FINN_XILINX_PATH:=/home/xilinx}"
+: "${FINN_XILINX_VERSION:=2024.2}"
+
 if [ -n "${HPPS_FINN_ROOT:-}" ]; then
   CANDIDATES+=("$HPPS_FINN_ROOT")
 fi
