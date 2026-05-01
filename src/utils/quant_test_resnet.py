@@ -356,20 +356,13 @@ def _remap_key(key):
     return key
 
 
-def load_fp32_weights(model, checkpoint_path, strict=False):
-    """Load FP32 fine-tuned weights into QuantTestResNet.
-
-    Handles key remapping (stem naming) and skips Brevitas quantizer parameters.
-    Downsample indices match timm naturally (Conv at .1, BN at .2).
-
-    Returns (missing_keys, unexpected_keys) from load_state_dict.
-    """
-    state_dict = torch.load(checkpoint_path, map_location="cpu")
+def _prepare_quant_test_resnet_state_dict(model, state_dict, remap_keys=False):
+    """Normalize a checkpoint state_dict for QuantTestResNet loading."""
 
     new_state_dict = {}
     skipped = []
     for key, value in state_dict.items():
-        new_key = _remap_key(key)
+        new_key = _remap_key(key) if remap_keys else key
         if any(tag in new_key for tag in QUANTIZER_TAGS):
             skipped.append(key)
             continue
@@ -378,7 +371,6 @@ def load_fp32_weights(model, checkpoint_path, strict=False):
     if skipped:
         print(f"  Skipped {len(skipped)} quantizer params")
 
-    # Drop shape-mismatched keys
     model_sd = model.state_dict()
     shape_skipped = []
     for k in list(new_state_dict.keys()):
@@ -389,6 +381,12 @@ def load_fp32_weights(model, checkpoint_path, strict=False):
         print(f"  Skipped {len(shape_skipped)} shape-mismatched keys:")
         for s in shape_skipped:
             print(f"    {s}")
+
+    return new_state_dict
+
+
+def _finalize_quant_test_resnet_load(model, new_state_dict, strict=False):
+    """Load a normalized state_dict and print the usual diagnostics."""
 
     result = model.load_state_dict(new_state_dict, strict=strict)
 
@@ -406,3 +404,43 @@ def load_fp32_weights(model, checkpoint_path, strict=False):
         print(f"  [WARNING] Unexpected keys: {result.unexpected_keys}")
 
     return result.missing_keys, result.unexpected_keys
+
+
+def _load_quant_checkpoint(model, state_dict, strict=False):
+    """Load an already-quantized QuantTestResNet checkpoint."""
+
+    new_state_dict = _prepare_quant_test_resnet_state_dict(
+        model,
+        state_dict,
+        remap_keys=False,
+    )
+    return _finalize_quant_test_resnet_load(model, new_state_dict, strict=strict)
+
+
+def _load_fp32_checkpoint(model, state_dict, strict=False):
+    """Load an FP32 timm-style test_resnet checkpoint into QuantTestResNet."""
+
+    new_state_dict = _prepare_quant_test_resnet_state_dict(
+        model,
+        state_dict,
+        remap_keys=True,
+    )
+    return _finalize_quant_test_resnet_load(model, new_state_dict, strict=strict)
+
+
+def load_test_resnet_weights(model, checkpoint_path, strict=False):
+    """Load either an FP32 timm checkpoint or a QuantTestResNet checkpoint.
+
+    Quantized checkpoints are loaded directly with quantizer keys skipped and
+    shape mismatches dropped. FP32 checkpoints follow the existing remapping
+    path used for canonical initialization.
+    """
+    state_dict = torch.load(checkpoint_path, map_location="cpu")
+    is_quant_checkpoint = any(
+        key.startswith("quant_inp.") or key.startswith("stem_conv1.")
+        for key in state_dict.keys()
+    )
+    if is_quant_checkpoint:
+        return _load_quant_checkpoint(model, state_dict, strict=strict)
+
+    return _load_fp32_checkpoint(model, state_dict, strict=strict)
