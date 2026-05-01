@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-04-30 - Ultra96 6w6a hardware baseline
+
+Recorded the first successful `test_resnet_6w6a` full FINN build targeting
+`Ultra96` in `baseline-results/hw/test-resnet/ultra96_6w6a.json`.
+
+### Hardware result
+
+| Board | Model | LUT | FF | BRAM36 | BRAM18 | DSP | URAM |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `Ultra96` | `test_resnet_6w6a` | 60,805 | 66,615 | 145 | 85 | 15 | 0 |
+
+- BRAM18-equivalent usage: `375`
+- Post-route setup timing met at `10.0 ns` with `WNS = 2.262 ns`
+- Post-route hold timing met with `WHS = 0.010 ns`
+- FINN estimated throughput from the generated report: `1.73 fps`
+
 ## 2026-04-24 - test_resnet KD-QAT sweep
 
 First canonical QAT sweep from the current FP32 branch.

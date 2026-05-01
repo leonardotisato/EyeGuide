@@ -7,6 +7,7 @@
 #   train_test_resnet       Canonical FP32 baseline for test_resnet (upgraded R18 teacher, sound KD pipeline)
 #   train_resnet18_from_resnet50_kd  Distill resnet50_fp32_kd.pth into the upgraded full-image ResNet18 teacher
 #   eval_teacher_224        Validate ResNet18 teacher at 224x224
+#   eval_test_resnet_checkpoint  Evaluate a saved FP32/QAT test_resnet checkpoint and write JSON
 #   qat_test_resnet         Canonical KD-QAT for test_resnet from the canonical FP32 baseline
 #   export_test_resnet      QONNX export for test_resnet
 #   train_custom_net        Canonical FP32 training for custom_net (m=3, strong aug, weighted CE)
@@ -39,6 +40,7 @@ case "$CMD" in
     train_test_resnet)      SCRIPT="src/train_test_resnet.py" ;;
     train_resnet18_from_resnet50_kd) SCRIPT="src/train_resnet18_from_resnet50_kd.py" ;;
     eval_teacher_224)       SCRIPT="src/eval_teacher_224.py" ;;
+    eval_test_resnet_checkpoint) SCRIPT="src/eval_test_resnet_checkpoint.py" ;;
     qat_test_resnet)        SCRIPT="src/qat_test_resnet.py" ;;
     export_test_resnet)     SCRIPT="src/export_test_resnet.py" ;;
     train_custom_net)       SCRIPT="src/train_custom_net.py" ;;
