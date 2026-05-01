@@ -6,18 +6,20 @@ import copy
 import csv
 maindir_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "PerspectiveStudy"))
 sys.path.append(maindir_path)
-print("Added to sys.path:", maindir_path)
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 from .metrics import bootstrap_metrics, GradCAM, save_gradcam, get_last_conv_layer
+from .reporting import format_test_metrics
 import numpy as np
 from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score, confusion_matrix
 from tqdm import tqdm
 import sys
 from sklearn.metrics import f1_score, precision_score, recall_score
 from .generals import progress_bar
+import matplotlib
+matplotlib.use("Agg")
 import seaborn as sns
 import matplotlib.pyplot as plt
 
@@ -192,6 +194,25 @@ def train(model, train_loader, valid_loader, epochs, learning_rate, weight_decay
         
         
 
+def _select_eval_inputs(batch, model_type):
+    if len(batch) == 2:
+        inputs, labels = batch
+        return inputs, labels
+
+    if len(batch) != 4:
+        raise ValueError(f"Unexpected batch size: {len(batch)}")
+
+    if model_type == "teacher":
+        inputs, _, labels, _ = batch
+        return inputs, labels
+    if model_type in ["student", "student_kd"]:
+        _, inputs, labels, _ = batch
+        return inputs, labels
+
+    raise ValueError(
+        f"Paired batches require a teacher/student-compatible model_type. Received model_type='{model_type}'."
+    )
+
 def test(model, test_loader, device, model_type, bootstrap=False, savedir = None, n_bootstrap=10000):
     model.to(device)
     model.eval()
@@ -204,17 +225,7 @@ def test(model, test_loader, device, model_type, bootstrap=False, savedir = None
 
     with torch.no_grad():
         for batch in test_loader:
-            if len(batch) == 2:
-                inputs, labels = batch
-            elif len(batch) == 4:
-                if model_type == 'teacher':
-                    inputs, _, labels,_ = batch
-                elif model_type == 'student' or 'student_kd':
-                    _, inputs, labels, _ = batch
-                else:
-                    raise ValueError(f"Unknown model_type: {model_type}")
-            else:
-                raise ValueError(f"Unexpected batch size: {len(batch)}")
+            inputs, labels = _select_eval_inputs(batch, model_type)
 
             inputs, labels = inputs.to(device), labels.to(device) # bring inputs and labels to the same model device
 
@@ -229,20 +240,31 @@ def test(model, test_loader, device, model_type, bootstrap=False, savedir = None
             all_probs.extend(probs.cpu().numpy())
 
     accuracy = 100 * correct / total if total > 0 else 0
-    f1 = f1_score(all_labels, all_preds, average='weighted') * 100.0
-    precision = precision_score(all_labels, all_preds, average='weighted') * 100.0
-    recall = recall_score(all_labels, all_preds, average='weighted') * 100.0
+    f1 = f1_score(all_labels, all_preds, average='weighted', zero_division=0) * 100.0
+    precision = precision_score(all_labels, all_preds, average='weighted', zero_division=0) * 100.0
+    recall = recall_score(all_labels, all_preds, average='weighted', zero_division=0) * 100.0
 
-    cm = confusion_matrix(all_labels, all_preds)
+    point_metrics_pct = {
+        'accuracy_overall': float(accuracy),
+        'precision_weighted': float(precision),
+        'recall_weighted': float(recall),
+        'f1_weighted': float(f1),
+    }
+
+    cm_labels = sorted(set(all_labels) | set(all_preds))
+    cm = confusion_matrix(all_labels, all_preds, labels=cm_labels)
     print(f"confusion matrix: {cm}")
 
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False, 
-                xticklabels=np.unique(all_labels), yticklabels=np.unique(all_labels))
-    plt.title("Confusion Matrix")
-    plt.xlabel("Predicted labels")
-    plt.ylabel("True labels")
-    plt.savefig(os.path.join(savedir, f"{model_type}_confusion_matrix.png"), dpi=300)
+    if savedir is not None:
+        os.makedirs(savedir, exist_ok=True)
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False, 
+                    xticklabels=cm_labels, yticklabels=cm_labels)
+        plt.title("Confusion Matrix")
+        plt.xlabel("Predicted labels")
+        plt.ylabel("True labels")
+        plt.savefig(os.path.join(savedir, f"{model_type}_confusion_matrix.png"), dpi=300)
+        plt.close()
 
     # ---------------------
     # --- show gradcams ---
@@ -254,17 +276,7 @@ def test(model, test_loader, device, model_type, bootstrap=False, savedir = None
 
     # collect samples by class
     for batch in test_loader:
-        if len(batch) == 2:
-            inputs, labels = batch
-        elif len(batch) == 4:
-            if model_type == 'teacher':
-                inputs, _, labels, _ = batch
-            elif model_type in ['student', 'student_kd']:
-                _, inputs, labels, _ = batch
-            else:
-                raise ValueError(f"Unknown model_type: {model_type}")
-        else:
-            raise ValueError(f"Unexpected batch size: {len(batch)}")
+        inputs, labels = _select_eval_inputs(batch, model_type)
 
         inputs, labels = inputs.to(device), labels.to(device)
 
@@ -332,21 +344,18 @@ def test(model, test_loader, device, model_type, bootstrap=False, savedir = None
 
     print(f"Test Accuracy: {accuracy:.2f}% | F1: {f1:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
     if bootstrap:
-        metrics = bootstrap_metrics(
-        all_preds = all_preds, 
-        all_labels = all_labels,
-        n_bootstrap=n_bootstrap, 
-        confidence_level=0.95
-    )
+        raw_bootstrap_metrics = bootstrap_metrics(
+            all_preds=all_preds,
+            all_labels=all_labels,
+            n_bootstrap=n_bootstrap,
+            confidence_level=0.95
+        )
+        metrics = format_test_metrics(
+            point_metrics_pct=point_metrics_pct,
+            raw_bootstrap_metrics=raw_bootstrap_metrics,
+        )
     else:
-        # performing inference without bootstrapping
-    # create a dictionary with all metrics
-        metrics = {
-            'accuracy': float(accuracy),
-            'f1': float(f1),
-            'precision': float(precision),
-            'recall': float(recall)
-        }
+        metrics = format_test_metrics(point_metrics_pct=point_metrics_pct)
     return metrics
 
 
