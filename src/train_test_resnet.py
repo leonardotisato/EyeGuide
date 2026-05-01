@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from utils.dataset import FundusClsDataset, prepare_dataframes, safe_pil_read
 from utils.generals import progress_bar
 from utils.model import ResNet18Classifier
+from utils.reporting import build_train_test_resnet_report
 from utils.seed import set_seeds
 from utils.training import test
 from utils.transforms_224_light import (
@@ -344,21 +345,22 @@ def main(cfg: DictConfig) -> None:
     )
     print(f"Test metrics: {test_metrics}")
 
-    report = {
-        "model": MODEL_NAME,
-        "n_params": n_params,
-        "epochs": best_epoch + 1,
-        "best_val_f1": round(best_val_f1, 4),
-        "best_val_loss": round(best_val_loss, 4),
-        "checkpoint": ckpt_path,
-        "teacher": "resnet18_from_resnet50_fp32_kd.pth (512x512 full-image strong train / test eval)",
-        "student_resolution": 224,
-        "teacher_resolution": 512,
-        "input_size": [1, 3, 224, 224],
-        "kd_temperature": KD_TEMPERATURE,
-        "kd_alpha": KD_ALPHA,
-        "use_weighted_loss": False,
-    }
+    report = build_train_test_resnet_report(
+        model=MODEL_NAME,
+        n_params=n_params,
+        epochs=best_epoch + 1,
+        best_val_f1=round(best_val_f1, 4),
+        best_val_loss=round(best_val_loss, 4),
+        checkpoint=ckpt_path,
+        teacher="resnet18_from_resnet50_fp32_kd.pth (512x512 full-image strong train / test eval)",
+        student_resolution=224,
+        teacher_resolution=512,
+        input_size=[1, 3, 224, 224],
+        kd_temperature=KD_TEMPERATURE,
+        kd_alpha=KD_ALPHA,
+        use_weighted_loss=False,
+        test_metrics=test_metrics,
+    )
     report_path = os.path.join(cfg.results_dir, "train_test_resnet_report.json")
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
