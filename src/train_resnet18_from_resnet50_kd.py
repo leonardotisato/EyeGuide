@@ -27,11 +27,12 @@ from utils.losses import kd_loss
 from utils.model import ResNet18Classifier, ResNet50Classifier
 from utils.seed import set_seeds
 from utils.training import test, train_knowledge_distillation
-from utils.transforms_512_strong import (
-    test_transform_class as test_transform_class,
-    train_transform_class as train_transform_class,
-)
+from utils.transforms import make_strong_train_transform, make_test_transform
 from utils.visualization import save_metrics_and_plot
+
+
+train_transform_class = make_strong_train_transform(512)
+test_transform_class = make_test_transform(512)
 
 
 TEACHER_CHECKPOINT = "resnet50_fp32_kd.pth"
@@ -217,8 +218,8 @@ def main(cfg: DictConfig) -> None:
         "train_dataset_type": "PairedFundusFullDataset",
         "val_dataset_type": "PairedFundusFullDataset",
         "test_dataset_type": "FundusClsDataset",
-        "train_transform": "transforms_512_strong.train_transform_class",
-        "eval_transform": "transforms_512_strong.test_transform_class",
+        "train_transform": "utils.transforms.make_strong_train_transform(512)",
+        "eval_transform": "utils.transforms.make_test_transform(512)",
         "student_architecture": "ResNet18Classifier",
         "teacher_architecture": "ResNet50Classifier",
     }

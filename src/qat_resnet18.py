@@ -31,9 +31,13 @@ sys.path.insert(0, os.path.dirname(__file__))
 from utils.seed import set_seeds
 from utils.quant_resnet18 import QuantResNet18, load_kd_weights, model_tag
 from utils.dataset import FundusClsDataset, prepare_dataframes
-from utils.transforms_512_light import test_transform_class, train_transform_class
+from utils.transforms import make_light_train_transform, make_test_transform
 from utils.training import test
 from utils.generals import progress_bar
+
+
+train_transform_class = make_light_train_transform(512)
+test_transform_class = make_test_transform(512)
 
 
 WEIGHT_BITS = 4

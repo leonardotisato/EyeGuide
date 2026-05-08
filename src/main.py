@@ -13,10 +13,13 @@ from utils.losses import kd_loss
 from utils.training import train, train_knowledge_distillation, test
 from utils.model import ResNet50Classifier
 from utils.dataset import FundusClsDatasetZoom, PairedFundusDataset, prepare_dataframes
-from utils.transforms_512_strong import train_transform_class, test_transform_class
+from utils.transforms import make_strong_train_transform, make_test_transform
 from utils.generals import getOutFileName
 import numpy as np
 import json
+
+train_transform_class = make_strong_train_transform(512)
+test_transform_class = make_test_transform(512)
 # =====================================================
 def convert_dict(d):
     new_dict = {} 

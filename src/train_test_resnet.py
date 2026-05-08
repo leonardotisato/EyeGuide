@@ -39,16 +39,13 @@ from utils.generals import progress_bar
 from utils.model import ResNet18Classifier
 from utils.seed import set_seeds
 from utils.training import test
-from utils.transforms_224_light import (
-    test_transform_class as student_test_transform,
-)
-from utils.transforms_224_strong import (
-    train_transform_class as student_train_transform,
-)
-from utils.transforms_512_strong import (
-    train_transform_class as teacher_train_transform,
-    test_transform_class as teacher_test_transform,
-)
+from utils.transforms import make_strong_train_transform, make_test_transform
+
+
+student_test_transform = make_test_transform(224)
+student_train_transform = make_strong_train_transform(224)
+teacher_train_transform = make_strong_train_transform(512)
+teacher_test_transform = make_test_transform(512)
 
 
 LR = 1e-4

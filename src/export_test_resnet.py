@@ -35,7 +35,9 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(__file__))
 from utils.seed import set_seeds
 from utils.quant_test_resnet import QuantTestResNet, model_tag
-from utils.transforms_224_strong import SIZE
+
+
+INPUT_SIZE = 224
 
 
 @hydra.main(config_path="../config", config_name="config", version_base=None)
@@ -71,7 +73,7 @@ def main(cfg: DictConfig) -> None:
 
     # ── Export to QONNX ──────────────────────────────────────────────────
     export_path = os.path.join(cfg.models_dir, f"test_resnet_{tag}.onnx")
-    dummy_input = torch.randn(1, 3, SIZE, SIZE).to(device)
+    dummy_input = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE).to(device)
 
     print("\nExporting to QONNX ...")
     export_qonnx(

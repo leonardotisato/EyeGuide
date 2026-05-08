@@ -35,7 +35,9 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(__file__))
 from utils.seed import set_seeds
 from utils.quant_resnet18 import QuantResNet18, model_tag
-from utils.transforms_512_light import SIZE
+
+
+INPUT_SIZE = 512
 
 
 WEIGHT_BITS = 4
@@ -72,7 +74,7 @@ def main(cfg: DictConfig) -> None:
 
     # ── Export to QONNX ──────────────────────────────────────────────────
     export_path = os.path.join(cfg.models_dir, f"resnet18_{tag}.onnx")
-    dummy_input = torch.randn(1, 3, SIZE, SIZE).to(device)
+    dummy_input = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE).to(device)
 
     print("\nExporting to QONNX ...")
     export_qonnx(

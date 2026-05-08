@@ -13,12 +13,15 @@ from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_sc
 from utils.seed import set_seeds
 from utils.model import ResNet18Classifier
 from utils.dataset import FundusClsDataset, FundusClsDatasetZoom, prepare_dataframes
-from utils.transforms_512_light import train_transform_class, test_transform_class
+from utils.transforms import make_light_train_transform, make_test_transform
 from utils.generals import getOutFileName   # la tua versione con Europe/Amsterdam
 from utils.generals import progress_bar     # se la metti in un file a parte, altrimenti importa da dove l'hai messa
 from utils.visualization import visualize_batch
 import hydra
 from omegaconf import DictConfig
+
+train_transform_class = make_light_train_transform(512)
+test_transform_class = make_test_transform(512)
 
 def evaluate_zoom_levels(cfg, n_splits: int = 5, random_seed: int = 42) -> Dict[Any, Tuple[float, float]]:
     """

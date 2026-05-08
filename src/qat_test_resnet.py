@@ -46,16 +46,13 @@ from utils.model import ResNet18Classifier
 from utils.quant_test_resnet import QuantTestResNet, load_test_resnet_weights, model_tag
 from utils.seed import set_seeds
 from utils.training import test
-from utils.transforms_224_light import (
-    test_transform_class as student_test_transform,
-)
-from utils.transforms_224_strong import (
-    train_transform_class as student_train_transform,
-)
-from utils.transforms_512_strong import (
-    test_transform_class as teacher_test_transform,
-    train_transform_class as teacher_train_transform,
-)
+from utils.transforms import make_strong_train_transform, make_test_transform
+
+
+student_test_transform = make_test_transform(224)
+student_train_transform = make_strong_train_transform(224)
+teacher_test_transform = make_test_transform(512)
+teacher_train_transform = make_strong_train_transform(512)
 
 
 KD_TEMPERATURE = 3.0
