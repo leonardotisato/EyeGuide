@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from torch.utils.data import DataLoader
 
-
 @dataclass(frozen=True)
 class EvalProfile:
     """Describe the dataset and transform domain for one evaluation stage."""
@@ -13,19 +12,23 @@ class EvalProfile:
     dataset_kind: str
     transform_key: str
     description: str
+    preprocess_key: str | None = None
 
 
 FundusClsDataset = None
 FundusClsDatasetZoom = None
 prepare_dataframes = None
 test_transform_224 = None
+test_transform_192 = None
 test_transform_512 = None
+trim_fundus_black_border = None
 
 
 RESNET50_ZOOM_TEACHER_PROFILE = "resnet50_zoom_teacher_512"
 RESNET50_FULL_KD_PROFILE = "resnet50_full_kd_512"
 RESNET18_FROM_RESNET50_KD_PROFILE = "resnet18_from_resnet50_kd_512"
 TEST_RESNET_224_PROFILE = "test_resnet_224"
+TEST_RESNET_192_TRIM_PROFILE = "test_resnet_trim192"
 TEST_RESNET_QAT_224_PROFILE = "test_resnet_qat_224"
 
 
@@ -53,6 +56,13 @@ EVAL_PROFILES = {
         dataset_kind="full",
         transform_key="test_transform_224",
         description="Full-image 224 eval domain for the FP32 test_resnet student.",
+    ),
+    TEST_RESNET_192_TRIM_PROFILE: EvalProfile(
+        name=TEST_RESNET_192_TRIM_PROFILE,
+        dataset_kind="full",
+        transform_key="test_transform_192",
+        preprocess_key="trim_fundus_black_border",
+        description="Black-border-trimmed 192 eval domain for the trim-192 FP32 test_resnet student.",
     ),
     TEST_RESNET_QAT_224_PROFILE: EvalProfile(
         name=TEST_RESNET_QAT_224_PROFILE,
@@ -99,20 +109,23 @@ def _load_dataset_class(dataset_kind):
 
 def _load_transform(transform_key):
     global test_transform_224
+    global test_transform_192
     global test_transform_512
 
     try:
+        from .transforms import make_test_transform
+
         if transform_key == "test_transform_224" and test_transform_224 is None:
-            from .transforms_224_light import test_transform_class as _test_transform_224
-
-            test_transform_224 = _test_transform_224
+            test_transform_224 = make_test_transform(224)
+        elif transform_key == "test_transform_192" and test_transform_192 is None:
+            test_transform_192 = make_test_transform(192)
         elif transform_key == "test_transform_512" and test_transform_512 is None:
-            from .transforms_512_strong import test_transform_class as _test_transform_512
-
-            test_transform_512 = _test_transform_512
+            test_transform_512 = make_test_transform(512)
     except ModuleNotFoundError:
         if transform_key == "test_transform_224" and test_transform_224 is None:
             test_transform_224 = lambda **kwargs: kwargs
+        elif transform_key == "test_transform_192" and test_transform_192 is None:
+            test_transform_192 = lambda **kwargs: kwargs
         elif transform_key == "test_transform_512" and test_transform_512 is None:
             test_transform_512 = lambda **kwargs: kwargs
 
@@ -121,8 +134,28 @@ def _resolve_transform(profile):
     _load_transform(profile.transform_key)
     return {
         "test_transform_224": test_transform_224,
+        "test_transform_192": test_transform_192,
         "test_transform_512": test_transform_512,
     }[profile.transform_key]
+
+
+def _load_preprocess(preprocess_key):
+    global trim_fundus_black_border
+
+    if preprocess_key == "trim_fundus_black_border" and trim_fundus_black_border is None:
+        from .dataset import trim_fundus_black_border as _trim_fundus_black_border
+
+        trim_fundus_black_border = _trim_fundus_black_border
+
+
+def _resolve_preprocess(profile):
+    if profile.preprocess_key is None:
+        return None
+
+    _load_preprocess(profile.preprocess_key)
+    return {
+        "trim_fundus_black_border": trim_fundus_black_border,
+    }[profile.preprocess_key]
 
 
 def build_eval_dataset(cfg, test_df, profile_name):
@@ -130,6 +163,7 @@ def build_eval_dataset(cfg, test_df, profile_name):
 
     profile = get_eval_profile(profile_name)
     transform = _resolve_transform(profile)
+    preprocess = _resolve_preprocess(profile)
     _load_dataset_class(profile.dataset_kind)
 
     if profile.dataset_kind == "zoom":
@@ -146,6 +180,7 @@ def build_eval_dataset(cfg, test_df, profile_name):
             test_df,
             train=False,
             transform=transform,
+            preprocess=preprocess,
         )
 
     raise ValueError(f"Unsupported dataset kind '{profile.dataset_kind}' for profile '{profile.name}'")

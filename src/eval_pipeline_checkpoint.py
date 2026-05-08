@@ -7,6 +7,7 @@ models that make up the current canonical pipeline:
 - ``resnet50_fp32_kd``
 - ``resnet18_from_resnet50_fp32_kd``
 - ``test_resnet_fp32_kd``
+- ``test_resnet_fp32_kd_trim192_ft``
 - ``test_resnet_{8,6,4}w{8,6,4}a_qat``
 
 Each model key resolves to the correct architecture family and the coherent
@@ -27,6 +28,7 @@ from utils.eval_profiles import (
     RESNET18_FROM_RESNET50_KD_PROFILE,
     RESNET50_FULL_KD_PROFILE,
     RESNET50_ZOOM_TEACHER_PROFILE,
+    TEST_RESNET_192_TRIM_PROFILE,
     TEST_RESNET_224_PROFILE,
     TEST_RESNET_QAT_224_PROFILE,
     build_test_loader,
@@ -76,6 +78,13 @@ TARGETS = {
         checkpoint="models/test_resnet_fp32_kd.pth",
         report_path="baseline-results/test-resnet/test_summary_test_resnet_fp32_kd.json",
         eval_profile=TEST_RESNET_224_PROFILE,
+        family="test_resnet_fp32",
+    ),
+    "test_resnet_fp32_kd_trim192_ft": EvalTarget(
+        key="test_resnet_fp32_kd_trim192_ft",
+        checkpoint="models/test_resnet_fp32_kd_trim192_ft.pth",
+        report_path="baseline-results/test-resnet/test_summary_test_resnet_fp32_kd_trim192_ft.json",
+        eval_profile=TEST_RESNET_192_TRIM_PROFILE,
         family="test_resnet_fp32",
     ),
     "test_resnet_8w8a_qat": EvalTarget(

@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import ToTensor, Resize
 import numpy as np
 from torch.utils.data import Dataset, DataLoader, random_split, WeightedRandomSampler
-from typing import Tuple, List, Dict, Any
+from typing import Tuple, List, Dict, Any, Callable, Optional
 import os
 import pandas as pd
 import random
@@ -49,14 +49,54 @@ def safe_cv2_read(path, flags=None, retries=10, delay=1.0):
         time.sleep(delay)
     return cv2.imread(path, flags) if flags is not None else cv2.imread(path)
 
+
+def trim_fundus_black_border(
+    image: np.ndarray,
+    threshold: int = 8,
+    pad_ratio: float = 0.01,
+    min_pad_px: int = 4,
+) -> np.ndarray:
+    """Trim only the clearly non-informative outer border of a fundus image.
+
+    The crop is *not* lesion-aware and uses only image content. During local
+    inspection against the lesion masks, a plain non-black crop could exclude a
+    handful of very dark edge pixels, so we keep a small safety pad around the
+    detected content box. This makes the rule conservative while still
+    improving information density before resizing to a lower resolution.
+    """
+
+    if image.ndim != 3:
+        return image
+
+    gray = image.mean(axis=2)
+    ys, xs = np.where(gray > threshold)
+    if len(xs) == 0 or len(ys) == 0:
+        return image
+
+    h, w = image.shape[:2]
+    pad = max(min_pad_px, int(round(min(h, w) * pad_ratio)))
+    x0 = max(int(xs.min()) - pad, 0)
+    x1 = min(int(xs.max()) + pad + 1, w)
+    y0 = max(int(ys.min()) - pad, 0)
+    y1 = min(int(ys.max()) + pad + 1, h)
+
+    return image[y0:y1, x0:x1]
+
 class FundusClsDataset(Dataset):
-    def __init__(self, data_csv, train=True, transform=None):
+    def __init__(
+        self,
+        data_csv,
+        train=True,
+        transform=None,
+        preprocess: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+    ):
         if isinstance(data_csv, str):
             self.data_csv = pd.read_csv(data_csv)
         else:
             self.data_csv = data_csv
         self.train = train  # Flag indicating if the dataset is used for training
         self.transform = transform  # Optional transforms
+        self.preprocess = preprocess
     
     def __len__(self):
         """Returns the length of the dataset (number of rows in the CSV)."""
@@ -73,6 +113,9 @@ class FundusClsDataset(Dataset):
         img_path = str(self.data_csv.iloc[idx]['image']).strip()
         img = safe_pil_read(img_path)
         img = np.array(img) 
+
+        if self.preprocess is not None:
+            img = self.preprocess(img)
         
         # -1 otherwise cross entropy loss does not works
 
