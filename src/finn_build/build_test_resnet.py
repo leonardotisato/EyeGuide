@@ -22,6 +22,8 @@ parser.add_argument("--output-dir", default="./build_finn_test_resnet")
 parser.add_argument("--estimates-only", action="store_true")
 parser.add_argument("--stop-after", default=None,
                     help="Stop after this step name (for incremental debugging).")
+parser.add_argument("--start-from", default=None,
+                    help="Resume from this step using the previous intermediate checkpoint in --output-dir.")
 parser.add_argument("--synth-clk-ns", type=float, default=10.0)
 parser.add_argument("--target-fps", type=int, default=1)
 parser.add_argument("--folding-config", default=None,
@@ -34,7 +36,6 @@ try:
     from finn.builder.build_dataflow_config import (
         DataflowBuildConfig,
         DataflowOutputType,
-        LargeFIFOMemStyle,
         ShellFlowType,
     )
     from finn.builder.build_dataflow import build_dataflow_cfg
@@ -72,17 +73,34 @@ estimate_steps = [
     "step_generate_estimate_reports",
 ]
 
-def resolve_steps(steps, stop_after=None):
-    if stop_after is None:
-        return steps
-    for i, step in enumerate(steps):
-        name = step if isinstance(step, str) else step.__name__
-        if name == stop_after:
-            return steps[: i + 1]
-    valid = [s if isinstance(s, str) else s.__name__ for s in steps]
-    print(f"\n[ERROR] --stop-after '{stop_after}' not found in step list.")
-    print(f"  Valid step names: {valid}")
-    sys.exit(1)
+def step_names(steps):
+    return [s if isinstance(s, str) else s.__name__ for s in steps]
+
+
+def resolve_display_steps(steps, start_from=None, stop_after=None):
+    names = step_names(steps)
+    start_idx = 0
+    stop_idx = len(steps) - 1
+
+    if start_from is not None:
+        if start_from not in names:
+            print(f"\n[ERROR] --start-from '{start_from}' not found in step list.")
+            print(f"  Valid step names: {names}")
+            sys.exit(1)
+        start_idx = names.index(start_from)
+
+    if stop_after is not None:
+        if stop_after not in names:
+            print(f"\n[ERROR] --stop-after '{stop_after}' not found in step list.")
+            print(f"  Valid step names: {names}")
+            sys.exit(1)
+        stop_idx = names.index(stop_after)
+
+    if start_idx > stop_idx:
+        print(f"\n[ERROR] --start-from '{start_from}' comes after --stop-after '{stop_after}'.")
+        sys.exit(1)
+
+    return steps[start_idx : stop_idx + 1]
 
 
 # Insert folding step before minimize_bit_width
@@ -112,9 +130,11 @@ else:
     selected_steps = full_steps
     mode_label = "Full bitstream"
 
-if args.stop_after:
-    selected_steps = resolve_steps(selected_steps, args.stop_after)
-    mode_label = f"Incremental (stop after {args.stop_after})"
+display_steps = resolve_display_steps(selected_steps, args.start_from, args.stop_after)
+if args.start_from or args.stop_after:
+    start_lbl = args.start_from or step_names(selected_steps)[0]
+    stop_lbl = args.stop_after or step_names(selected_steps)[-1]
+    mode_label = f"Incremental ({start_lbl} -> {stop_lbl})"
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +171,7 @@ if args.folding_config:
 else:
     print(f"  Folding: auto (target_fps_parallelization)")
 print(f"  Output:  {args.output_dir}")
-step_names = [s if isinstance(s, str) else s.__name__ for s in selected_steps]
-print(f"  Steps:   {' -> '.join(step_names)}")
+print(f"  Steps:   {' -> '.join(step_names(display_steps))}")
 print(f"{'=' * 60}\n")
 
 
@@ -171,6 +190,8 @@ else:
 
 cfg = DataflowBuildConfig(
     steps=selected_steps,
+    start_step=args.start_from,
+    stop_step=args.stop_after,
     output_dir=args.output_dir,
     synth_clk_period_ns=args.synth_clk_ns,
     board=board,

@@ -17,14 +17,14 @@ Key transform added over ResNet18 pipeline:
 Must run inside the FINN Docker container.
 """
 
+import numpy as np
 from onnx import TensorProto, helper
+from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import get_by_name
 
 from custom_steps_resnet18 import (
-    step_fundus_attach_preproc,  # noqa: F401 — re-exported for build_test_resnet.py
     graph_summary,
     FixThresholdDataTypes,
-    FundusPreProc,  # noqa: F401
 )
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.datatype import DataType
@@ -247,6 +247,309 @@ class ConvertAvgPoolTruncToQuantAvgPool(Transformation):
         return model, False
 
 
+class CollapseTransposeWrappedMul(Transformation):
+    """Collapse inverse Transpose -> Mul -> Transpose patterns.
+
+    This targets the residual branch pattern that appears *before*
+    InferChannelwiseLinearLayer:
+
+      x --Transpose(P)--> x' --Mul(const)--> y' --Transpose(P^-1)--> y
+
+    where the Mul constant is channelwise/broadcastable. We rewrite it to:
+
+      x --Mul(const_permuted)--> y
+
+    by permuting the constant tensor into the pre-transpose layout. This keeps
+    the branch in the same layout as its neighbors and avoids creating
+    Transpose/ChannelwiseOp/Transpose wrappers later on.
+    """
+
+    def apply(self, model):
+        graph = model.graph
+        graph_modified = False
+        nodes = [n for n in graph.node]
+
+        for node in nodes:
+            if node.op_type != "Transpose":
+                continue
+
+            consumers = model.find_consumers(node.output[0])
+            if consumers is None or len(consumers) != 1:
+                continue
+
+            mul_node = consumers[0]
+            if mul_node.op_type != "Mul" or model.is_join_node(mul_node):
+                continue
+
+            if len(mul_node.input) < 2:
+                continue
+
+            const_name = mul_node.input[1]
+            const_val = model.get_initializer(const_name)
+            if const_val is None:
+                continue
+
+            second = model.find_consumer(mul_node.output[0])
+            if second is None or second.op_type != "Transpose":
+                continue
+
+            perm0_attr = get_by_name(node.attribute, "perm")
+            perm1_attr = get_by_name(second.attribute, "perm")
+            if perm0_attr is None or perm1_attr is None:
+                continue
+
+            perm0 = list(perm0_attr.ints)
+            perm1 = list(perm1_attr.ints)
+            if len(perm0) != len(perm1):
+                continue
+            inv0 = [perm0.index(i) for i in range(len(perm0))]
+            if perm1 != inv0:
+                continue
+
+            start_name = node.input[0]
+            end_name = second.output[0]
+            start_shape = model.get_tensor_shape(start_name)
+            end_shape = model.get_tensor_shape(end_name)
+            if start_shape is None or end_shape is None or tuple(start_shape) != tuple(end_shape):
+                continue
+
+            new_const = const_val
+            if const_val.ndim == len(perm0):
+                try:
+                    new_const = np.transpose(const_val, perm0)
+                except Exception:
+                    continue
+            elif const_val.ndim == 1:
+                # 1-D channelwise params already broadcast on the last axis.
+                new_const = const_val
+            elif np.prod(const_val.shape) == 1:
+                new_const = const_val
+            else:
+                continue
+
+            mul_node.input[0] = start_name
+            model.set_initializer(const_name, new_const)
+            mul_node.output[0] = end_name
+            model.set_tensor_shape(end_name, start_shape)
+            start_layout = model.get_tensor_layout(start_name)
+            if start_layout is not None:
+                model.set_tensor_layout(end_name, start_layout)
+
+            graph_modified = True
+            graph.node.remove(node)
+            graph.node.remove(second)
+
+        if graph_modified:
+            model = model.transform(InferShapes())
+            model = model.transform(InferDataLayouts())
+            model = model.transform(InferDataTypes())
+        return (model, graph_modified)
+
+
+class MoveTransposePastDuplicateStreams(Transformation):
+    """Push Transpose through DuplicateStreams with shape-aware rewiring.
+
+    After InferDuplicateStreamsLayer we often see:
+
+      x --Transpose(P)--> y --DuplicateStreams--> y0, y1, ...
+
+    This pass rewrites it to:
+
+      x --DuplicateStreams--> x0, x1, ...
+      x_i --Transpose(P)--> y_i
+
+    while updating DuplicateStreams shape attributes to match ``x``. This lets
+    branch-local inverse transpose pairs collapse cleanly on consumers.
+    """
+
+    def apply(self, model):
+        graph = model.graph
+        graph_modified = False
+        nodes = list(graph.node)
+
+        for node in nodes:
+            if node.op_type != "Transpose":
+                continue
+
+            consumers = model.find_consumers(node.output[0])
+            if consumers is None or len(consumers) != 1:
+                continue
+
+            dup_node = consumers[0]
+            if dup_node.op_type != "DuplicateStreams":
+                continue
+
+            perm_attr = get_by_name(node.attribute, "perm")
+            if perm_attr is None:
+                continue
+            perm = list(perm_attr.ints)
+
+            start_name = node.input[0]
+            trans_out = node.output[0]
+            start_shape = model.get_tensor_shape(start_name)
+            trans_shape = model.get_tensor_shape(trans_out)
+            if start_shape is None or trans_shape is None:
+                continue
+
+            dup_outputs = list(dup_node.output)
+            raw_outputs = []
+            for _ in dup_outputs:
+                raw_name = model.make_new_valueinfo_name()
+                raw_vi = helper.make_tensor_value_info(raw_name, TensorProto.FLOAT, start_shape)
+                graph.value_info.append(raw_vi)
+                raw_outputs.append(raw_name)
+
+            dup_node.input[0] = start_name
+            dup_node.output[:] = raw_outputs
+            dup_inst = getCustomOp(dup_node)
+            dup_inst.set_nodeattr("NumChannels", int(start_shape[-1]))
+            dup_inst.set_nodeattr("numInputVectors", list(start_shape[:-1]))
+
+            start_layout = model.get_tensor_layout(start_name)
+            trans_layout = model.get_tensor_layout(trans_out)
+
+            dup_index = next(i for i, n in enumerate(graph.node) if n is dup_node)
+            insert_index = dup_index + 1
+            for raw_name, old_out in zip(raw_outputs, dup_outputs):
+                trans_node = helper.make_node(
+                    "Transpose",
+                    [raw_name],
+                    [old_out],
+                    perm=perm,
+                )
+                graph.node.insert(insert_index, trans_node)
+                insert_index += 1
+                model.set_tensor_shape(raw_name, start_shape)
+                model.set_tensor_shape(old_out, trans_shape)
+                if start_layout is not None:
+                    model.set_tensor_layout(raw_name, start_layout)
+                if trans_layout is not None:
+                    model.set_tensor_layout(old_out, trans_layout)
+
+            graph.node.remove(node)
+            graph_modified = True
+
+        if graph_modified:
+            model = model.transform(InferShapes())
+            model = model.transform(InferDataLayouts())
+            model = model.transform(InferDataTypes())
+        return (model, graph_modified)
+
+
+class MoveSignMulPastThresholding(Transformation):
+    """Rewrite sign-only Mul -> Thresholding into Thresholding -> linear ops.
+
+    For per-channel sign masks A in {-1, +1}, we use:
+
+      count((-x) >= T) = B - count(x >= (-reverse(T) + 1))
+
+    where B is the number of threshold steps. For channels with A=+1 the
+    thresholding stays unchanged. For channels with A=-1 we update the
+    threshold vector and then emit a post-threshold linear correction:
+
+      y = sign * y' + bias
+
+    with sign in {-1, +1} and bias in {0, B}. The later
+    InferChannelwiseLinearLayer pass can convert those post-threshold linear
+    ops into HW ChannelwiseOp nodes.
+    """
+
+    def apply(self, model):
+        graph = model.graph
+        graph_modified = False
+        for n in list(graph.node):
+            if n.op_type != "Mul" or model.is_fork_node(n) or model.is_join_node(n):
+                continue
+
+            A = model.get_initializer(n.input[1])
+            if A is None:
+                continue
+
+            consumer = model.find_consumer(n.output[0])
+            if consumer is None or consumer.op_type != "Thresholding":
+                continue
+
+            actual_ndims = len(tuple(filter(lambda x: x > 1, A.shape)))
+            is_scalar = A.ndim == 0 or all(x == 1 for x in A.shape)
+            is_1d = actual_ndims == 1
+            if not (is_scalar or is_1d):
+                continue
+
+            sign_vec = A.reshape(-1).astype(np.int64)
+            if not np.isin(sign_vec, [-1.0, 1.0]).all():
+                continue
+
+            threshold_name = consumer.input[1]
+            T = model.get_initializer(threshold_name)
+            if T is None or T.ndim != 2:
+                continue
+
+            num_ch, num_steps = T.shape
+            if sign_vec.size == 1:
+                sign_vec = np.full((num_ch,), sign_vec.item(), dtype=np.int64)
+            elif sign_vec.size != num_ch:
+                continue
+
+            Tnew = np.array(T, copy=True)
+            bias_vec = np.zeros((num_ch,), dtype=np.int64)
+            for ch in range(num_ch):
+                if sign_vec[ch] < 0:
+                    Tnew[ch] = -T[ch][::-1] + 1
+                    bias_vec[ch] = int(num_steps)
+
+            model.set_initializer(threshold_name, Tnew)
+            try:
+                th_inst = getCustomOp(consumer)
+                th_inst.minimize_accumulator_width(model)
+            except Exception:
+                pass
+
+            start_name = n.input[0]
+            end_name = consumer.output[0]
+            out_shape = model.get_tensor_shape(end_name)
+            out_layout = model.get_tensor_layout(end_name)
+            out_dt = model.get_tensor_datatype(end_name)
+            if out_dt is None or not out_dt.is_integer():
+                continue
+
+            th_out = model.make_new_valueinfo_name()
+            mul_out = model.make_new_valueinfo_name()
+            graph.value_info.append(helper.make_tensor_value_info(th_out, TensorProto.INT64, out_shape))
+            graph.value_info.append(helper.make_tensor_value_info(mul_out, TensorProto.INT64, out_shape))
+            if out_shape is not None:
+                model.set_tensor_shape(th_out, out_shape)
+                model.set_tensor_shape(mul_out, out_shape)
+            if out_layout is not None:
+                model.set_tensor_layout(th_out, out_layout)
+                model.set_tensor_layout(mul_out, out_layout)
+            model.set_tensor_datatype(th_out, out_dt)
+            model.set_tensor_datatype(mul_out, DataType["INT32"])
+
+            sign_name = model.make_new_valueinfo_name()
+            bias_name = model.make_new_valueinfo_name()
+            model.set_initializer(sign_name, sign_vec)
+            model.set_initializer(bias_name, bias_vec)
+            model.set_tensor_datatype(sign_name, DataType["INT2"])
+            model.set_tensor_datatype(bias_name, DataType["UINT32"])
+
+            consumer.input[0] = start_name
+            consumer.output[0] = th_out
+
+            mul_node = helper.make_node("Mul", [th_out, sign_name], [mul_out], name=n.name + "_post")
+            add_node = helper.make_node("Add", [mul_out, bias_name], [end_name], name=n.name + "_bias")
+
+            consumer_index = next(i for i, node in enumerate(graph.node) if node is consumer)
+            graph.node.insert(consumer_index + 1, mul_node)
+            graph.node.insert(consumer_index + 2, add_node)
+            graph.node.remove(n)
+            graph_modified = True
+
+        if graph_modified:
+            model = model.transform(InferShapes())
+            model = model.transform(InferDataLayouts())
+        return (model, graph_modified)
+
+
 # ---------------------------------------------------------------------------
 # Step 4: Streamline
 # ---------------------------------------------------------------------------
@@ -277,7 +580,6 @@ def step_test_resnet_streamline(model: ModelWrapper, cfg: DataflowBuildConfig) -
         MoveScalarMulPastConv(),
         MoveAddPastMul(),
         CollapseRepeatedAdd(),
-        CollapseRepeatedMul(),
         MoveMulPastMaxPool(),
         AbsorbAddIntoMultiThreshold(),
         FactorOutMulSignMagnitude(),
@@ -285,7 +587,6 @@ def step_test_resnet_streamline(model: ModelWrapper, cfg: DataflowBuildConfig) -
         Absorb1BitMulIntoMatMul(),
         Absorb1BitMulIntoConv(),
         RoundAndClipThresholds(),
-        RemoveIdentityOps(),
     ]
 
     for pass_idx in range(5):
@@ -375,7 +676,16 @@ def _get_test_resnet_to_hw_transformations():
         InferQuantizedMatrixVectorActivation(),
         # Duplicate streams for residual forks
         InferDuplicateStreamsLayer(),
+        MoveTransposePastDuplicateStreams(),
+        MoveTransposePastFork(),
+        AbsorbConsecutiveTransposes(),
+        CollapseTransposeWrappedMul(),
+        MoveSignMulPastThresholding(),
         InferChannelwiseLinearLayer(),
+        InferPool(),
+        MoveTransposePastFork(),
+        AbsorbConsecutiveTransposes(),
+        InferConvInpGen(),
         InferLabelSelectLayer(),
         AbsorbConsecutiveTransposes(),
         AbsorbTransposeIntoFlatten(),
@@ -402,7 +712,6 @@ def step_test_resnet_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
         Absorb1BitMulIntoConv(),
         AbsorbConsecutiveTransposes(),
         RoundAndClipThresholds(),
-        RemoveIdentityOps(),
     ]
     for pass_idx in range(3):
         model_str_before = model.model.SerializeToString()
