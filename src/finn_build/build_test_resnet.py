@@ -1,6 +1,9 @@
 """
 FINN Dataflow Build for QAT test_resnet -> Ultra96-v2 bitstream.
 
+Defaults to the current canonical trim-192 accuracy branch (`8w8a`), while
+still allowing explicit `--onnx` overrides such as `test_resnet_trim192_6w6a`.
+
 Usage (estimates only):
     python src/finn_build/build_test_resnet.py --estimates-only
 
@@ -17,8 +20,8 @@ import sys
 parser = argparse.ArgumentParser(
     description="FINN dataflow build for QAT test_resnet -> Ultra96-v2."
 )
-parser.add_argument("--onnx", default="models/test_resnet_8w8a.onnx")
-parser.add_argument("--output-dir", default="./build_finn_test_resnet")
+parser.add_argument("--onnx", default="models/test_resnet_trim192_8w8a.onnx")
+parser.add_argument("--output-dir", default="./build_finn_test_resnet_trim192")
 parser.add_argument("--estimates-only", action="store_true")
 parser.add_argument("--stop-after", default=None,
                     help="Stop after this step name (for incremental debugging).")

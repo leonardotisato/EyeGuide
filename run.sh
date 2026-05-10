@@ -9,7 +9,8 @@
 #   eval_teacher_224        Validate ResNet18 teacher at 224x224
 #   eval_pipeline_checkpoint Evaluate any saved checkpoint in the canonical teacher->QAT ladder
 #   qat_test_resnet         Canonical KD-QAT for test_resnet from the canonical FP32 baseline
-#   export_test_resnet      QONNX export for test_resnet
+#   export_test_resnet      QONNX export for canonical 224 test_resnet
+#   export_test_resnet_trim192 QONNX export for canonical trim-192 test_resnet
 #   train_custom_net        Canonical FP32 training for custom_net (m=3, strong aug, weighted CE)
 #   qat_custom_net          QAT for CustomSmallNet
 #   export_custom_net       QONNX export for CustomSmallNet
@@ -43,6 +44,7 @@ case "$CMD" in
     eval_pipeline_checkpoint) SCRIPT="src/eval_pipeline_checkpoint.py" ;;
     qat_test_resnet)        SCRIPT="src/qat_test_resnet.py" ;;
     export_test_resnet)     SCRIPT="src/export_test_resnet.py" ;;
+    export_test_resnet_trim192) SCRIPT="src/export_test_resnet_trim192.py" ;;
     train_custom_net)       SCRIPT="src/train_custom_net.py" ;;
     qat_custom_net)         SCRIPT="src/qat_custom_net.py" ;;
     export_custom_net)      SCRIPT="src/export_custom_net.py" ;;
@@ -63,7 +65,7 @@ case "$CMD" in
 esac
 
 case "$CMD" in
-    export_test_resnet|export_custom_net|export_resnet18|export_mobilenetv1)
+    export_test_resnet|export_test_resnet_trim192|export_custom_net|export_resnet18|export_mobilenetv1)
         GPU_FLAGS=()
         ;;
 esac
