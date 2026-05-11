@@ -39,7 +39,6 @@ try:
     from finn.builder.build_dataflow_config import (
         DataflowBuildConfig,
         DataflowOutputType,
-        LargeFIFOMemStyle,
         ShellFlowType,
     )
     from finn.builder.build_dataflow import build_dataflow_cfg
@@ -204,9 +203,7 @@ cfg = DataflowBuildConfig(
     shell_flow_type=shell_flow_type,
     target_fps=args.target_fps,
     folding_config_file=args.folding_config,
-    large_fifo_mem_style=(
-        LargeFIFOMemStyle.URAM if board == "KV260_SOM" else LargeFIFOMemStyle.AUTO
-    ),
+    large_fifo_mem_style=LargeFIFOMemStyle.AUTO,
     split_large_fifos=True,
     default_swg_exception=True,
     generate_outputs=generate_outputs,

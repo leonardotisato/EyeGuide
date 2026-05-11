@@ -553,54 +553,42 @@ class MoveSignMulPastThresholding(Transformation):
 class ApplyKriaUramConfig(Transformation):
     """Bias eligible KV260 layers toward URAM without touching vendored FINN.
 
-    Safe rules:
-      - ConvolutionInputGenerator: use URAM unless it is the fully-unfolded
-        parallel-window fast path, which only supports auto/distributed.
-      - MatrixVectorActivation / VectorVectorActivation: use URAM for
-        internal_decoupled weight memories and enable runtime-writeable weights,
-        which FINN requires for URAM-backed streamed weights.
+    Conservative rules:
+      - Leave StreamingFIFO and ConvolutionInputGenerator at their default
+        memory styles. Forcing small FIFOs/window buffers into URAM caused
+        severe URAM over-utilization on KV260.
+      - MatrixVectorActivation / VectorVectorActivation: use URAM only for
+        larger internal_decoupled weight memories and enable
+        runtime_writeable_weights, which FINN requires for URAM-backed streamed
+        weights.
     """
+
+    MIN_BRAM18_FOR_URAM = 12
+    MIN_WMEM_DEPTH_FOR_URAM = 2048
 
     def apply(self, model):
         graph_modified = False
         counts = {
-            "ConvolutionInputGenerator": 0,
             "MatrixVectorActivation": 0,
             "VectorVectorActivation": 0,
         }
-        skipped_parallel_window = 0
+        skipped_small = {
+            "MatrixVectorActivation": 0,
+            "VectorVectorActivation": 0,
+        }
 
         for node in model.graph.node:
-            if node.op_type == "ConvolutionInputGenerator":
-                inst = getCustomOp(node)
-                parallel_window = inst.get_nodeattr("parallel_window")
-                fully_unfolded = inst.get_nodeattr("SIMD") == inst.get_nodeattr("IFMChannels")
-                non_depthwise = inst.get_nodeattr("depthwise") == 0
-                stride = inst.get_nodeattr("Stride")
-                dilation = inst.get_nodeattr("Dilation")
-                no_stride = all(int(s) == 1 for s in stride)
-                no_dilation = all(int(d) == 1 for d in dilation)
-                unsupported_parallel_window = (
-                    parallel_window == 1
-                    and fully_unfolded
-                    and non_depthwise
-                    and no_stride
-                    and no_dilation
-                )
-                if unsupported_parallel_window:
-                    skipped_parallel_window += 1
-                    continue
-                if inst.get_nodeattr("ram_style") != "ultra":
-                    inst.set_nodeattr("ram_style", "ultra")
-                    counts[node.op_type] += 1
-                    graph_modified = True
-                continue
-
             if node.op_type not in ["MatrixVectorActivation", "VectorVectorActivation"]:
                 continue
 
             inst = getCustomOp(node)
             if inst.get_nodeattr("mem_mode") != "internal_decoupled":
+                continue
+
+            est_bram18 = inst.bram_estimation()
+            wmem_depth = inst.calc_wmem()
+            if est_bram18 < self.MIN_BRAM18_FOR_URAM or wmem_depth < self.MIN_WMEM_DEPTH_FOR_URAM:
+                skipped_small[node.op_type] += 1
                 continue
 
             node_changed = False
@@ -619,11 +607,24 @@ class ApplyKriaUramConfig(Transformation):
             summary = ", ".join(
                 f"{name}={count}" for (name, count) in counts.items() if count > 0
             )
-            if skipped_parallel_window > 0:
-                summary += f", skipped_parallel_window_cig={skipped_parallel_window}"
+            skipped_summary = ", ".join(
+                f"skipped_small_{name}={count}"
+                for (name, count) in skipped_small.items()
+                if count > 0
+            )
+            if skipped_summary:
+                summary = f"{summary}, {skipped_summary}" if summary else skipped_summary
             print(f"  KV260 URAM bias applied: {summary}")
         else:
-            print("  KV260 URAM bias: no eligible nodes updated")
+            skipped_summary = ", ".join(
+                f"skipped_small_{name}={count}"
+                for (name, count) in skipped_small.items()
+                if count > 0
+            )
+            if skipped_summary:
+                print(f"  KV260 URAM bias: no eligible nodes updated ({skipped_summary})")
+            else:
+                print("  KV260 URAM bias: no eligible nodes updated")
 
         return (model, graph_modified)
 
