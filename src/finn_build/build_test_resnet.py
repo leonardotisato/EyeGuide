@@ -39,6 +39,7 @@ try:
     from finn.builder.build_dataflow_config import (
         DataflowBuildConfig,
         DataflowOutputType,
+        LargeFIFOMemStyle,
         ShellFlowType,
     )
     from finn.builder.build_dataflow import build_dataflow_cfg
