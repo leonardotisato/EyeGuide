@@ -550,6 +550,84 @@ class MoveSignMulPastThresholding(Transformation):
         return (model, graph_modified)
 
 
+class ApplyKriaUramConfig(Transformation):
+    """Bias eligible KV260 layers toward URAM without touching vendored FINN.
+
+    Safe rules:
+      - ConvolutionInputGenerator: use URAM unless it is the fully-unfolded
+        parallel-window fast path, which only supports auto/distributed.
+      - MatrixVectorActivation / VectorVectorActivation: use URAM for
+        internal_decoupled weight memories and enable runtime-writeable weights,
+        which FINN requires for URAM-backed streamed weights.
+    """
+
+    def apply(self, model):
+        graph_modified = False
+        counts = {
+            "ConvolutionInputGenerator": 0,
+            "MatrixVectorActivation": 0,
+            "VectorVectorActivation": 0,
+        }
+        skipped_parallel_window = 0
+
+        for node in model.graph.node:
+            if node.op_type == "ConvolutionInputGenerator":
+                inst = getCustomOp(node)
+                parallel_window = inst.get_nodeattr("parallel_window")
+                fully_unfolded = inst.get_nodeattr("SIMD") == inst.get_nodeattr("IFMChannels")
+                non_depthwise = inst.get_nodeattr("depthwise") == 0
+                stride = inst.get_nodeattr("Stride")
+                dilation = inst.get_nodeattr("Dilation")
+                no_stride = all(int(s) == 1 for s in stride)
+                no_dilation = all(int(d) == 1 for d in dilation)
+                unsupported_parallel_window = (
+                    parallel_window == 1
+                    and fully_unfolded
+                    and non_depthwise
+                    and no_stride
+                    and no_dilation
+                )
+                if unsupported_parallel_window:
+                    skipped_parallel_window += 1
+                    continue
+                if inst.get_nodeattr("ram_style") != "ultra":
+                    inst.set_nodeattr("ram_style", "ultra")
+                    counts[node.op_type] += 1
+                    graph_modified = True
+                continue
+
+            if node.op_type not in ["MatrixVectorActivation", "VectorVectorActivation"]:
+                continue
+
+            inst = getCustomOp(node)
+            if inst.get_nodeattr("mem_mode") != "internal_decoupled":
+                continue
+
+            node_changed = False
+            if inst.get_nodeattr("runtime_writeable_weights") != 1:
+                inst.set_nodeattr("runtime_writeable_weights", 1)
+                node_changed = True
+            if inst.get_nodeattr("ram_style") != "ultra":
+                inst.set_nodeattr("ram_style", "ultra")
+                node_changed = True
+
+            if node_changed:
+                counts[node.op_type] += 1
+                graph_modified = True
+
+        if graph_modified:
+            summary = ", ".join(
+                f"{name}={count}" for (name, count) in counts.items() if count > 0
+            )
+            if skipped_parallel_window > 0:
+                summary += f", skipped_parallel_window_cig={skipped_parallel_window}"
+            print(f"  KV260 URAM bias applied: {summary}")
+        else:
+            print("  KV260 URAM bias: no eligible nodes updated")
+
+        return (model, graph_modified)
+
+
 # ---------------------------------------------------------------------------
 # Step 4: Streamline
 # ---------------------------------------------------------------------------
@@ -742,4 +820,17 @@ def step_test_resnet_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
         for n in non_hw:
             print(f"  WARNING: non-HW node: {n.op_type} [{n.name}]")
 
+    return cleanup_model(model)
+
+
+def step_test_resnet_apply_kv260_uram_config(
+    model: ModelWrapper, cfg: DataflowBuildConfig
+) -> ModelWrapper:
+    """Bias eligible hardware layers toward URAM for KV260 builds."""
+
+    if cfg.board != "KV260_SOM":
+        print(f"  Skipping KV260 URAM bias for board {cfg.board}")
+        return model
+
+    model = model.transform(ApplyKriaUramConfig())
     return cleanup_model(model)

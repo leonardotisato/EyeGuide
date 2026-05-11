@@ -1,5 +1,5 @@
 """
-FINN Dataflow Build for QAT test_resnet -> Ultra96-v2 bitstream.
+FINN Dataflow Build for QAT test_resnet -> Kria KV260 bitstream.
 
 Defaults to the current canonical trim-192 accuracy branch (`8w8a`), while
 still allowing explicit `--onnx` overrides such as `test_resnet_trim192_6w6a`.
@@ -18,10 +18,10 @@ import os
 import sys
 
 parser = argparse.ArgumentParser(
-    description="FINN dataflow build for QAT test_resnet -> Ultra96-v2."
+    description="FINN dataflow build for QAT test_resnet -> Kria KV260."
 )
 parser.add_argument("--onnx", default="models/test_resnet_trim192_8w8a.onnx")
-parser.add_argument("--output-dir", default="./build_finn_test_resnet_trim192")
+parser.add_argument("--output-dir", default="./build_finn_test_resnet_trim192_kv260")
 parser.add_argument("--estimates-only", action="store_true")
 parser.add_argument("--stop-after", default=None,
                     help="Stop after this step name (for incremental debugging).")
@@ -31,14 +31,15 @@ parser.add_argument("--synth-clk-ns", type=float, default=10.0)
 parser.add_argument("--target-fps", type=int, default=1)
 parser.add_argument("--folding-config", default=None,
                     help="Manual folding config JSON. If None, uses target_fps auto-folding.")
-parser.add_argument("--board", default="Ultra96",
-                    help="Target board (default: Ultra96 = xczu3eg-sbva484-1-e)")
+parser.add_argument("--board", default="KV260_SOM",
+                    help="Target board (default: KV260_SOM = xck26-sfvc784-2LV-c)")
 args = parser.parse_args()
 
 try:
     from finn.builder.build_dataflow_config import (
         DataflowBuildConfig,
         DataflowOutputType,
+        LargeFIFOMemStyle,
         ShellFlowType,
     )
     from finn.builder.build_dataflow import build_dataflow_cfg
@@ -49,6 +50,7 @@ try:
         step_test_resnet_streamline,
         step_test_resnet_lower,
         step_test_resnet_to_hw,
+        step_test_resnet_apply_kv260_uram_config,
     )
 except ImportError as e:
     print(f"\n[ERROR] Import failed: {e}\n"
@@ -70,6 +72,7 @@ estimate_steps = [
     step_test_resnet_streamline,
     step_test_resnet_lower,
     step_test_resnet_to_hw,
+    step_test_resnet_apply_kv260_uram_config,
     "step_create_dataflow_partition",
     "step_specialize_layers",
     "step_minimize_bit_width",
@@ -201,6 +204,9 @@ cfg = DataflowBuildConfig(
     shell_flow_type=shell_flow_type,
     target_fps=args.target_fps,
     folding_config_file=args.folding_config,
+    large_fifo_mem_style=(
+        LargeFIFOMemStyle.URAM if board == "KV260_SOM" else LargeFIFOMemStyle.AUTO
+    ),
     split_large_fifos=True,
     default_swg_exception=True,
     generate_outputs=generate_outputs,
