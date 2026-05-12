@@ -557,7 +557,7 @@ class ApplyKriaUramConfig(Transformation):
       - Leave StreamingFIFO and ConvolutionInputGenerator at their default
         memory styles. Forcing small FIFOs/window buffers into URAM caused
         severe URAM over-utilization on KV260.
-      - MatrixVectorActivation / VectorVectorActivation: use URAM only for a
+      - MVAU / VVAU weight memories: use URAM only for a
         handful of the largest internal_decoupled weight memories and enable
         runtime_writeable_weights, which FINN requires for URAM-backed streamed
         weights.
@@ -571,21 +571,28 @@ class ApplyKriaUramConfig(Transformation):
     MIN_WMEM_DEPTH_FOR_URAM = 1024
     TARGET_RECOVERED_BRAM18 = 8
     MAX_URAM_CANDIDATES = 4
+    OP_TYPE_LABELS = {
+        "MatrixVectorActivation": "MVAU",
+        "MVAU": "MVAU",
+        "VectorVectorActivation": "VVAU",
+        "VVAU": "VVAU",
+    }
 
     def apply(self, model):
         graph_modified = False
         counts = {
-            "MatrixVectorActivation": 0,
-            "VectorVectorActivation": 0,
+            "MVAU": 0,
+            "VVAU": 0,
         }
         skipped_small = {
-            "MatrixVectorActivation": 0,
-            "VectorVectorActivation": 0,
+            "MVAU": 0,
+            "VVAU": 0,
         }
         candidates = []
 
         for node in model.graph.node:
-            if node.op_type not in ["MatrixVectorActivation", "VectorVectorActivation"]:
+            label = self.OP_TYPE_LABELS.get(node.op_type)
+            if label is None:
                 continue
 
             inst = getCustomOp(node)
@@ -595,12 +602,12 @@ class ApplyKriaUramConfig(Transformation):
             est_bram18 = inst.bram_estimation()
             wmem_depth = inst.calc_wmem()
             if est_bram18 < self.MIN_BRAM18_FOR_URAM or wmem_depth < self.MIN_WMEM_DEPTH_FOR_URAM:
-                skipped_small[node.op_type] += 1
+                skipped_small[label] += 1
                 continue
 
-            candidates.append((node, inst, est_bram18, wmem_depth))
+            candidates.append((node, inst, label, est_bram18, wmem_depth))
 
-        candidates.sort(key=lambda item: (item[2], item[3]), reverse=True)
+        candidates.sort(key=lambda item: (item[3], item[4]), reverse=True)
         selected = []
         recovered_bram18 = 0
         for candidate in candidates:
@@ -609,9 +616,9 @@ class ApplyKriaUramConfig(Transformation):
             if recovered_bram18 >= self.TARGET_RECOVERED_BRAM18:
                 break
             selected.append(candidate)
-            recovered_bram18 += candidate[2]
+            recovered_bram18 += candidate[3]
 
-        for (node, inst, est_bram18, wmem_depth) in selected:
+        for (node, inst, label, est_bram18, wmem_depth) in selected:
             node_changed = False
             if inst.get_nodeattr("runtime_writeable_weights") != 1:
                 inst.set_nodeattr("runtime_writeable_weights", 1)
@@ -621,12 +628,12 @@ class ApplyKriaUramConfig(Transformation):
                 node_changed = True
 
             if node_changed:
-                counts[node.op_type] += 1
+                counts[label] += 1
                 graph_modified = True
 
         candidate_summary = ", ".join(
-            f"{node.name}:{node.op_type}:bram18~{est_bram18}:wmem={wmem_depth}"
-            for (node, _, est_bram18, wmem_depth) in selected
+            f"{node.name}:{label}:bram18~{est_bram18}:wmem={wmem_depth}"
+            for (node, _, label, est_bram18, wmem_depth) in selected
         )
         if graph_modified:
             summary = ", ".join(
