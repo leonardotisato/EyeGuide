@@ -557,14 +557,20 @@ class ApplyKriaUramConfig(Transformation):
       - Leave StreamingFIFO and ConvolutionInputGenerator at their default
         memory styles. Forcing small FIFOs/window buffers into URAM caused
         severe URAM over-utilization on KV260.
-      - MatrixVectorActivation / VectorVectorActivation: use URAM only for
-        larger internal_decoupled weight memories and enable
+      - MatrixVectorActivation / VectorVectorActivation: use URAM only for a
+        handful of the largest internal_decoupled weight memories and enable
         runtime_writeable_weights, which FINN requires for URAM-backed streamed
         weights.
+
+    The current KV260 build is a near-miss on BRAM (a few BRAM18 units / a few
+    tiles over), so we target only enough large memories to plausibly recover
+    that margin instead of globally forcing every eligible node into URAM.
     """
 
-    MIN_BRAM18_FOR_URAM = 12
-    MIN_WMEM_DEPTH_FOR_URAM = 2048
+    MIN_BRAM18_FOR_URAM = 4
+    MIN_WMEM_DEPTH_FOR_URAM = 1024
+    TARGET_RECOVERED_BRAM18 = 8
+    MAX_URAM_CANDIDATES = 4
 
     def apply(self, model):
         graph_modified = False
@@ -576,6 +582,7 @@ class ApplyKriaUramConfig(Transformation):
             "MatrixVectorActivation": 0,
             "VectorVectorActivation": 0,
         }
+        candidates = []
 
         for node in model.graph.node:
             if node.op_type not in ["MatrixVectorActivation", "VectorVectorActivation"]:
@@ -591,6 +598,20 @@ class ApplyKriaUramConfig(Transformation):
                 skipped_small[node.op_type] += 1
                 continue
 
+            candidates.append((node, inst, est_bram18, wmem_depth))
+
+        candidates.sort(key=lambda item: (item[2], item[3]), reverse=True)
+        selected = []
+        recovered_bram18 = 0
+        for candidate in candidates:
+            if len(selected) >= self.MAX_URAM_CANDIDATES:
+                break
+            if recovered_bram18 >= self.TARGET_RECOVERED_BRAM18:
+                break
+            selected.append(candidate)
+            recovered_bram18 += candidate[2]
+
+        for (node, inst, est_bram18, wmem_depth) in selected:
             node_changed = False
             if inst.get_nodeattr("runtime_writeable_weights") != 1:
                 inst.set_nodeattr("runtime_writeable_weights", 1)
@@ -603,6 +624,10 @@ class ApplyKriaUramConfig(Transformation):
                 counts[node.op_type] += 1
                 graph_modified = True
 
+        candidate_summary = ", ".join(
+            f"{node.name}:{node.op_type}:bram18~{est_bram18}:wmem={wmem_depth}"
+            for (node, _, est_bram18, wmem_depth) in selected
+        )
         if graph_modified:
             summary = ", ".join(
                 f"{name}={count}" for (name, count) in counts.items() if count > 0
@@ -614,6 +639,11 @@ class ApplyKriaUramConfig(Transformation):
             )
             if skipped_summary:
                 summary = f"{summary}, {skipped_summary}" if summary else skipped_summary
+            if candidate_summary:
+                summary = (
+                    f"{summary}, target_bram18={self.TARGET_RECOVERED_BRAM18}, "
+                    f"selected=[{candidate_summary}]"
+                )
             print(f"  KV260 URAM bias applied: {summary}")
         else:
             skipped_summary = ", ".join(
@@ -621,6 +651,12 @@ class ApplyKriaUramConfig(Transformation):
                 for (name, count) in skipped_small.items()
                 if count > 0
             )
+            if candidate_summary:
+                skipped_summary = (
+                    f"{skipped_summary}, selected=[{candidate_summary}]"
+                    if skipped_summary
+                    else f"selected=[{candidate_summary}]"
+                )
             if skipped_summary:
                 print(f"  KV260 URAM bias: no eligible nodes updated ({skipped_summary})")
             else:
