@@ -1,18 +1,12 @@
 """
-KD-QAT fine-tuning for the trim->192 test_resnet experiment.
+Fine-tune a trimmed-input FP32 test_resnet student from ImageNet weights.
 
-This keeps the canonical teacher domain unchanged:
-- teacher: upgraded ResNet18 KD teacher (`resnet18_from_resnet50_fp32_kd.pth`)
-- teacher domain: full-image 512, strong-train / clean-eval
+This keeps the teacher on its established 512x512 full-image domain and changes
+only the student input path:
 
-But changes the student path to the experimental trim-192 domain:
-- student train domain: trim black border -> 192, strong train transform
-- student eval domain: trim black border -> 192, clean eval transform
-- student init: canonical trim-192 FP32 checkpoint (ImageNet-init)
-
-Typical runs:
-    python src/qat_test_resnet_trim192.py ++weight_bits=8 ++act_bits=8
-    python src/qat_test_resnet_trim192.py ++weight_bits=6 ++act_bits=6
+- trim the non-informative black border with a small safety pad
+- resize student inputs to ``++student_resolution`` (default: 192)
+- initialize the student from ImageNet pretrained timm weights
 """
 
 import csv
@@ -25,11 +19,10 @@ warnings.filterwarnings("ignore")
 
 import hydra
 import numpy as np
+import timm
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from brevitas.graph.calibrate import calibration_mode
 from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics import f1_score, precision_score, recall_score
 from torch.nn.utils import clip_grad_norm_
@@ -38,50 +31,43 @@ from torchvision import transforms as tv_transforms
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(__file__))
-from utils.dataset import FundusClsDataset, prepare_dataframes, safe_pil_read, trim_fundus_black_border
+from utils.dataset import prepare_dataframes, safe_pil_read, trim_fundus_black_border
 from utils.generals import progress_bar
 from utils.model import ResNet18Classifier
-from utils.quant_test_resnet import QuantTestResNet, load_test_resnet_weights, model_tag
 from utils.seed import set_seeds
 from utils.training import test
 from utils.transforms import make_strong_train_transform, make_test_transform
 
-student_test_transform = make_test_transform(192)
-student_train_transform = make_strong_train_transform(192)
-teacher_test_transform = make_test_transform(512)
+
 teacher_train_transform = make_strong_train_transform(512)
+teacher_test_transform = make_test_transform(512)
 
 
+LR = 1e-4
+EPOCHS = 200
+WEIGHT_DECAY = 1e-4
+PATIENCE = 50
+MODEL_NAME = "test_resnet.r160_in1k"
 KD_TEMPERATURE = 3.0
 KD_ALPHA = 0.25
 
-QAT_LR = 1e-5
-QAT_EPOCHS = 200
-QAT_WEIGHT_DECAY = 1e-4
-CALIB_BATCHES = 100
-BN_FREEZE_EPOCH = 5
-PATIENCE = 50
-TRIM192_FP32_WARM_START = "test_resnet_fp32_kd_trim192_ft.pth"
 
+def resolve_trim_fp32_run(student_resolution: int):
+    """Resolve stable names for one trimmed-input FP32 run."""
 
-def resolve_trim192_qat_run(weight_bits: int, act_bits: int):
-    """Resolve stable naming for one canonical trim-192 QAT run."""
-
-    bit_tag = f"{weight_bits}w{act_bits}a"
-    run_tag = f"trim192_{bit_tag}"
+    run_tag = f"trim{student_resolution}"
     return {
-        "bit_tag": bit_tag,
         "run_tag": run_tag,
-        "results_dir_name": f"qat_test_resnet_{run_tag}",
-        "checkpoint_name": f"test_resnet_{run_tag}_qat.pth",
-        "report_name": f"qat_test_resnet_{run_tag}_report.json",
-        "log_name": f"qat_test_resnet_{run_tag}_log.csv",
-        "model_type": f"test_resnet_{run_tag}_qat",
+        "checkpoint_name": f"test_resnet_fp32_kd_{run_tag}_ft.pth",
+        "results_dir_name": f"test_resnet_{run_tag}",
+        "report_name": f"train_test_resnet_{run_tag}_report.json",
+        "log_name": f"train_test_resnet_{run_tag}_log.csv",
+        "model_type": f"test_resnet_fp32_kd_{run_tag}_ft",
     }
 
 
-class DualResTrim192Dataset(Dataset):
-    """Return (student_image, teacher_image, label) for trim->192 KD/QAT."""
+class DualResTrimDataset(Dataset):
+    """Return (student_image, teacher_image, label) for a trimmed-input student."""
 
     def __init__(self, data_csv, student_transform, teacher_transform):
         self.data_csv = data_csv
@@ -117,18 +103,9 @@ def kd_loss(student_logits, teacher_logits, labels, temperature, alpha):
     return alpha * ce + (1 - alpha) * kl
 
 
-def freeze_bn(model):
-    """Set all BatchNorm layers to eval mode to freeze running stats during QAT."""
-    for module in model.modules():
-        if isinstance(module, (nn.BatchNorm2d, nn.BatchNorm1d)):
-            module.eval()
-
-
-def qat_train_one_epoch(student, teacher, train_loader, optimizer, device, epoch):
+def train_one_epoch(student, teacher, train_loader, optimizer, device):
     student.train()
     teacher.eval()
-    if epoch >= BN_FREEZE_EPOCH:
-        freeze_bn(student)
 
     running_loss = 0.0
     correct = 0
@@ -171,7 +148,7 @@ def qat_train_one_epoch(student, teacher, train_loader, optimizer, device, epoch
     return avg_loss, acc, f1
 
 
-def qat_validate(student, teacher, val_loader, temperature, alpha, device):
+def validate(student, teacher, val_loader, temperature, alpha, device):
     student.eval()
     teacher.eval()
     val_loss_sum = 0.0
@@ -188,6 +165,7 @@ def qat_validate(student, teacher, val_loader, temperature, alpha, device):
 
             student_logits = student(inputs_s)
             teacher_logits = teacher(inputs_t)
+
             loss = kd_loss(student_logits, teacher_logits, labels, temperature, alpha)
             val_loss_sum += loss.item()
 
@@ -218,14 +196,10 @@ def main(cfg: DictConfig) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    weight_bits = int(OmegaConf.select(cfg, "weight_bits", default=8))
-    act_bits = int(OmegaConf.select(cfg, "act_bits", default=8))
-    tag = model_tag(weight_bits, act_bits)
-
-    run_cfg = resolve_trim192_qat_run(
-        weight_bits=weight_bits,
-        act_bits=act_bits,
-    )
+    student_resolution = int(OmegaConf.select(cfg, "student_resolution", default=192))
+    student_test_transform = make_test_transform(student_resolution)
+    student_train_transform = make_strong_train_transform(student_resolution)
+    run_cfg = resolve_trim_fp32_run(student_resolution)
 
     results_dir = os.path.join(cfg.results_dir, run_cfg["results_dir_name"])
     os.makedirs(results_dir, exist_ok=True)
@@ -233,24 +207,21 @@ def main(cfg: DictConfig) -> None:
 
     train_df, val_df, test_df = prepare_dataframes(cfg)
 
-    train_dataset = DualResTrim192Dataset(
+    train_dataset = DualResTrimDataset(
         train_df,
         student_transform=student_train_transform,
         teacher_transform=teacher_train_transform,
     )
-    val_dataset = DualResTrim192Dataset(
+    val_dataset = DualResTrimDataset(
         val_df,
         student_transform=student_test_transform,
         teacher_transform=teacher_test_transform,
     )
+
+    from utils.dataset import FundusClsDataset
+
     test_dataset = FundusClsDataset(
         test_df,
-        train=False,
-        transform=student_test_transform,
-        preprocess=trim_fundus_black_border,
-    )
-    calib_dataset = FundusClsDataset(
-        train_df,
         train=False,
         transform=student_test_transform,
         preprocess=trim_fundus_black_border,
@@ -265,9 +236,6 @@ def main(cfg: DictConfig) -> None:
     test_loader = DataLoader(
         test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True
     )
-    calib_loader = DataLoader(
-        calib_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True
-    )
 
     teacher_path = os.path.join(cfg.models_dir, "resnet18_from_resnet50_fp32_kd.pth")
     if not os.path.exists(teacher_path):
@@ -281,83 +249,23 @@ def main(cfg: DictConfig) -> None:
     teacher.eval()
     for param in teacher.parameters():
         param.requires_grad = False
-    print("Teacher loaded and frozen (512x512 full-image, strong-train/test-eval domain).")
 
-    print("\n" + "=" * 50)
-    print(f"Creating QuantTestResNet [{tag}] for {run_cfg['run_tag']}")
-    print("=" * 50)
-    student = QuantTestResNet(
-        nr_classes=cfg.nr_classes,
-        weight_bit_width=weight_bits,
-        act_bit_width=act_bits,
-    )
-    n_params = sum(p.numel() for p in student.parameters())
+    print(f"\n{'=' * 50}")
+    print(f"Loading {MODEL_NAME} and fine-tuning from ImageNet pretrained timm weights")
+    print(f"{'=' * 50}")
+    model = timm.create_model(MODEL_NAME, pretrained=True, num_classes=cfg.nr_classes)
+    model.to(device)
+
+    n_params = sum(p.numel() for p in model.parameters())
     print(f"Student parameters: {n_params:,}")
-
-    student_init_checkpoint = OmegaConf.select(cfg, "warm_start_checkpoint", default=None)
-    if student_init_checkpoint is None:
-        student_init_checkpoint = os.path.join(cfg.models_dir, TRIM192_FP32_WARM_START)
-    if not os.path.exists(student_init_checkpoint):
-        print(f"[ERROR] Student init checkpoint not found: {student_init_checkpoint}")
-        return
-
-    print(f"\nLoading student init weights from: {student_init_checkpoint} (imagenet)")
-    missing, unexpected = load_test_resnet_weights(student, student_init_checkpoint)
-    non_quant_missing = [
-        key
-        for key in missing
-        if not any(
-            token in key
-            for token in [
-                "tensor_quant",
-                "scaling_impl",
-                "int_scaling_impl",
-                "zero_point",
-                "msb_clamp_bit_width_impl",
-                "act_quant",
-                "weight_quant",
-                "bias_quant",
-            ]
-        )
-    ]
-    if non_quant_missing:
-        print(f"[WARNING] Non-quantizer keys missing: {non_quant_missing}")
-    if unexpected:
-        print(f"[WARNING] Unexpected keys found: {unexpected}")
-    else:
-        print("Weight loading OK: only Brevitas quantizer params are missing.")
-
-    student.to(device)
-
-    print("\n" + "=" * 50)
-    print(f"Calibrating quantizer scales ({CALIB_BATCHES} batches) ...")
-    print("=" * 50)
-    student.eval()
-    with calibration_mode(student):
-        for batch_idx, (inputs, _) in enumerate(calib_loader):
-            if batch_idx >= CALIB_BATCHES:
-                break
-            with torch.no_grad():
-                student(inputs.to(device))
-            if (batch_idx + 1) % 25 == 0:
-                print(f"  Calibration batch {batch_idx + 1}/{CALIB_BATCHES}")
-    print("Calibration complete.")
-
-    print("\n" + "=" * 50)
+    print(f"Training: {EPOCHS} epochs, LR={LR}, patience={PATIENCE}")
     print(
-        "QAT fine-tuning: "
-        f"{QAT_EPOCHS} epochs, LR={QAT_LR}, patience={PATIENCE}, BN freeze={BN_FREEZE_EPOCH}"
+        f"Configuration: trim black border -> {student_resolution} student, "
+        "KD teacher remains full-image 512."
     )
-    print(
-        "Configuration: KD-QAT + trim black border -> 192 student + upgraded ResNet18 teacher "
-        "on 512 strong/eval-test transforms"
-    )
-    print(f"Warm start: {student_init_checkpoint} (imagenet)")
-    print(f"KD: temperature={KD_TEMPERATURE}, alpha={KD_ALPHA}")
-    print("=" * 50)
 
-    optimizer = optim.Adam(student.parameters(), lr=QAT_LR, weight_decay=QAT_WEIGHT_DECAY)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=QAT_EPOCHS)
+    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
     best_val_loss = float("inf")
     best_val_f1 = -1.0
@@ -383,12 +291,12 @@ def main(cfg: DictConfig) -> None:
             ]
         )
 
-    for epoch in tqdm(range(QAT_EPOCHS), desc=f"KD-QAT Trim192 {run_cfg['run_tag']}"):
-        train_loss, train_acc, train_f1 = qat_train_one_epoch(
-            student, teacher, train_loader, optimizer, device, epoch
+    for epoch in tqdm(range(EPOCHS), desc=f"FP32 KD {run_cfg['run_tag']} Epochs"):
+        train_loss, train_acc, train_f1 = train_one_epoch(
+            model, teacher, train_loader, optimizer, device
         )
-        val_loss, val_acc, val_f1, val_prec, val_rec = qat_validate(
-            student, teacher, val_loader, KD_TEMPERATURE, KD_ALPHA, device
+        val_loss, val_acc, val_f1, val_prec, val_rec = validate(
+            model, teacher, val_loader, KD_TEMPERATURE, KD_ALPHA, device
         )
         scheduler.step()
 
@@ -413,11 +321,10 @@ def main(cfg: DictConfig) -> None:
                     best_epoch,
                 ]
             )
-
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_val_f1 = val_f1
-            best_state = {k: v.cpu().clone() for k, v in student.state_dict().items()}
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             best_epoch = epoch
             patience_counter = 0
             print(f"  -> New best val loss: {val_loss:.4f} (val F1: {val_f1:.2f}%, epoch {epoch})")
@@ -429,42 +336,41 @@ def main(cfg: DictConfig) -> None:
             break
 
     if best_state is not None:
-        student.load_state_dict(best_state)
+        model.load_state_dict(best_state)
         print(
             f"\nRestored best model from epoch {best_epoch} "
             f"(val loss: {best_val_loss:.4f}, val F1: {best_val_f1:.2f}%)"
         )
-    student.to(device)
+    model.to(device)
 
-    qat_ckpt_path = os.path.join(cfg.models_dir, run_cfg["checkpoint_name"])
-    torch.save(student.state_dict(), qat_ckpt_path)
-    print(f"QAT checkpoint saved -> {qat_ckpt_path}")
+    ckpt_path = os.path.join(cfg.models_dir, run_cfg["checkpoint_name"])
+    torch.save(model.state_dict(), ckpt_path)
+    print(f"Checkpoint saved -> {ckpt_path}")
 
-    print("\n" + "=" * 50)
+    print(f"\n{'=' * 50}")
     print("Evaluating on test set ...")
-    print("=" * 50)
+    print(f"{'=' * 50}")
     test_metrics = test(
-        model=student,
+        model=model,
         test_loader=test_loader,
         device=device,
         model_type=run_cfg["model_type"],
         bootstrap=True,
         savedir=results_dir,
     )
-    print(f"QAT test metrics: {test_metrics}")
+    print(f"Test metrics: {test_metrics}")
 
     report = {
-        "weight_bits": weight_bits,
-        "act_bits": act_bits,
+        "model": MODEL_NAME,
         "n_params": n_params,
         "epochs": best_epoch + 1,
         "best_val_f1": round(best_val_f1, 4),
         "best_val_loss": round(best_val_loss, 4),
-        "checkpoint": qat_ckpt_path,
-        "student_init_checkpoint": student_init_checkpoint,
-        "student_init_mode": "imagenet",
+        "checkpoint": ckpt_path,
+        "student_init": "imagenet",
+        "init_checkpoint": None,
         "teacher": "resnet18_from_resnet50_fp32_kd.pth (512x512 full-image strong train / test eval)",
-        "student_resolution": 192,
+        "student_resolution": student_resolution,
         "teacher_resolution": 512,
         "student_preprocess": {
             "name": "trim_fundus_black_border",
@@ -472,9 +378,10 @@ def main(cfg: DictConfig) -> None:
             "pad_ratio": 0.01,
             "min_pad_px": 4,
         },
-        "input_size": [1, 3, 192, 192],
+        "input_size": [1, 3, student_resolution, student_resolution],
         "kd_temperature": KD_TEMPERATURE,
         "kd_alpha": KD_ALPHA,
+        "use_weighted_loss": False,
         "test_metrics": test_metrics,
     }
     report_path = os.path.join(results_dir, run_cfg["report_name"])

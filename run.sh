@@ -5,15 +5,14 @@
 # Commands:
 #   train_teacher           Historical ResNet50 KD teacher stack (main.py) — produces resnet50_fp32_kd.pth
 #   train_test_resnet       Canonical FP32 baseline for test_resnet (upgraded R18 teacher, sound KD pipeline)
+#   train_test_resnet_trim  Trimmed-input FP32 test_resnet; set ++student_resolution=160 or 192
 #   train_resnet18_from_resnet50_kd  Distill resnet50_fp32_kd.pth into the upgraded full-image ResNet18 teacher
 #   eval_teacher_224        Validate ResNet18 teacher at 224x224
 #   eval_pipeline_checkpoint Evaluate any saved checkpoint in the canonical teacher->QAT ladder
 #   qat_test_resnet         Canonical KD-QAT for test_resnet from the canonical FP32 baseline
+#   qat_test_resnet_trim    Trimmed-input KD-QAT test_resnet; set ++student_resolution=160 or 192
 #   export_test_resnet      QONNX export for canonical 224 test_resnet
-#   export_test_resnet_trim192 QONNX export for canonical trim-192 test_resnet
-#   train_custom_net        Canonical FP32 training for custom_net (m=3, strong aug, weighted CE)
-#   qat_custom_net          QAT for CustomSmallNet
-#   export_custom_net       QONNX export for CustomSmallNet
+#   export_test_resnet_trim QONNX export for trimmed-input test_resnet
 #   qat_resnet18            QAT for ResNet18
 #   export_resnet18         QONNX export for ResNet18
 #   train_mobilenetv1       Canonical FP32 KD fine-tune for MobileNetV1
@@ -39,22 +38,21 @@ shift
 case "$CMD" in
     train_teacher)          SCRIPT="src/main.py" ;;
     train_test_resnet)      SCRIPT="src/train_test_resnet.py" ;;
+    train_test_resnet_trim) SCRIPT="src/train_test_resnet_trim.py" ;;
     train_resnet18_from_resnet50_kd) SCRIPT="src/train_resnet18_from_resnet50_kd.py" ;;
     eval_teacher_224)       SCRIPT="src/eval_teacher_224.py" ;;
     eval_pipeline_checkpoint) SCRIPT="src/eval_pipeline_checkpoint.py" ;;
     qat_test_resnet)        SCRIPT="src/qat_test_resnet.py" ;;
+    qat_test_resnet_trim)   SCRIPT="src/qat_test_resnet_trim.py" ;;
     export_test_resnet)     SCRIPT="src/export_test_resnet.py" ;;
-    export_test_resnet_trim192) SCRIPT="src/export_test_resnet_trim192.py" ;;
-    train_custom_net)       SCRIPT="src/train_custom_net.py" ;;
-    qat_custom_net)         SCRIPT="src/qat_custom_net.py" ;;
-    export_custom_net)      SCRIPT="src/export_custom_net.py" ;;
+    export_test_resnet_trim) SCRIPT="src/export_test_resnet_trim.py" ;;
     qat_resnet18)           SCRIPT="src/qat_resnet18.py" ;;
     export_resnet18)        SCRIPT="src/export_resnet18.py" ;;
     train_mobilenetv1)      SCRIPT="src/train_mobilenetv1.py" ;;
     qat_mobilenetv1)        SCRIPT="src/qat_mobilenetv1.py" ;;
     export_mobilenetv1)     SCRIPT="src/export_mobilenetv1.py" ;;
     --help)
-        head -18 "$0" | tail -17
+        sed -n '/^# Commands:/,/^#$/p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *)
@@ -65,7 +63,7 @@ case "$CMD" in
 esac
 
 case "$CMD" in
-    export_test_resnet|export_test_resnet_trim192|export_custom_net|export_resnet18|export_mobilenetv1)
+    export_test_resnet|export_test_resnet_trim|export_resnet18|export_mobilenetv1)
         GPU_FLAGS=()
         ;;
 esac

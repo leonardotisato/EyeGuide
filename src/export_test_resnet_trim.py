@@ -1,19 +1,19 @@
 """
-Export the canonical trim-192 QAT test_resnet checkpoint to QONNX.
+Export a trimmed-input QAT test_resnet checkpoint to QONNX.
 
-Loads the checkpoint saved by `src/qat_test_resnet_trim192.py` and exports it
+Loads the checkpoint saved by `src/qat_test_resnet_trim.py` and exports it
 to QONNX. No recalibration is needed: the checkpoint already contains trained
 quantizer scales. BatchNorm nodes remain in the exported graph and are later
 folded by FINN Streamline.
 
-This export matches the trim-192 student domain:
-- input size: 192x192
-- checkpoint names: `test_resnet_trim192_{tag}_qat.pth`
-- exported ONNX names: `test_resnet_trim192_{tag}.onnx`
+This export matches the selected trimmed student domain:
+- input size: `++student_resolution` x `++student_resolution` (default: 192)
+- checkpoint names: `test_resnet_trim{resolution}_{tag}_qat.pth`
+- exported ONNX names: `test_resnet_trim{resolution}_{tag}.onnx`
 
 Run with:
-    bash run.sh export_test_resnet_trim192 ++weight_bits=8 ++act_bits=8
-    bash run.sh export_test_resnet_trim192 ++weight_bits=6 ++act_bits=6
+    bash run.sh export_test_resnet_trim ++student_resolution=192 ++weight_bits=8 ++act_bits=8
+    bash run.sh export_test_resnet_trim ++student_resolution=160 ++weight_bits=6 ++act_bits=6
 """
 
 import os
@@ -43,9 +43,6 @@ from utils.quant_test_resnet import QuantTestResNet, model_tag
 from utils.seed import set_seeds
 
 
-INPUT_SIZE = 192
-
-
 @hydra.main(config_path="../config", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
     set_seeds(cfg.RANDOM_SEED)
@@ -54,14 +51,19 @@ def main(cfg: DictConfig) -> None:
 
     weight_bits = int(OmegaConf.select(cfg, "weight_bits", default=8))
     act_bits = int(OmegaConf.select(cfg, "act_bits", default=8))
+    student_resolution = int(OmegaConf.select(cfg, "student_resolution", default=192))
     tag = model_tag(weight_bits, act_bits)
+    trim_tag = f"trim{student_resolution}"
 
     os.makedirs(cfg.results_dir, exist_ok=True)
 
-    ckpt_path = os.path.join(cfg.models_dir, f"test_resnet_trim192_{tag}_qat.pth")
+    ckpt_path = os.path.join(cfg.models_dir, f"test_resnet_{trim_tag}_{tag}_qat.pth")
     if not os.path.exists(ckpt_path):
         print(f"[ERROR] QAT checkpoint not found: {ckpt_path}")
-        print("Run src/qat_test_resnet_trim192.py first.")
+        print(
+            "Run src/qat_test_resnet_trim.py first, for example: "
+            f"++student_resolution={student_resolution} ++weight_bits={weight_bits} ++act_bits={act_bits}"
+        )
         return
 
     model = QuantTestResNet(
@@ -73,10 +75,10 @@ def main(cfg: DictConfig) -> None:
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
-    print(f"Loaded trim-192 QAT checkpoint: {ckpt_path}")
+    print(f"Loaded {trim_tag} QAT checkpoint: {ckpt_path}")
 
-    export_path = os.path.join(cfg.models_dir, f"test_resnet_trim192_{tag}.onnx")
-    dummy_input = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE).to(device)
+    export_path = os.path.join(cfg.models_dir, f"test_resnet_{trim_tag}_{tag}.onnx")
+    dummy_input = torch.randn(1, 3, student_resolution, student_resolution).to(device)
 
     print("\nExporting to QONNX ...")
     export_qonnx(
@@ -108,7 +110,7 @@ def main(cfg: DictConfig) -> None:
     print(f"\nDone. Exported model: {export_path}")
     print(
         "Next: python src/finn_build/build_test_resnet.py "
-        f"--estimates-only --onnx models/test_resnet_trim192_{tag}.onnx"
+        f"--estimates-only --onnx models/test_resnet_{trim_tag}_{tag}.onnx"
     )
 
 
