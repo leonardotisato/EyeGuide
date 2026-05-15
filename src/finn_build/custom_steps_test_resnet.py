@@ -17,6 +17,7 @@ Key transform added over ResNet18 pipeline:
 Must run inside the FINN Docker container.
 """
 
+import math
 import numpy as np
 from onnx import TensorProto, helper
 from qonnx.custom_op.registry import getCustomOp
@@ -741,6 +742,200 @@ def step_test_resnet_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
     if non_hw:
         for n in non_hw:
             print(f"  WARNING: non-HW node: {n.op_type} [{n.name}]")
+
+    return cleanup_model(model)
+
+
+def _get_raw_nodeattr(node, attr_name, default=None):
+    attr = get_by_name(node.attribute, attr_name)
+    if attr is None:
+        return default
+    value = helper.get_attribute_value(attr)
+    if isinstance(value, bytes):
+        return value.decode()
+    return value
+
+
+def _set_raw_nodeattr(node, attr_name, value):
+    old_attr = get_by_name(node.attribute, attr_name)
+    if old_attr is not None:
+        node.attribute.remove(old_attr)
+    node.attribute.append(helper.make_attribute(attr_name, value))
+
+
+def _safe_fifo_width(node):
+    folded_shape = list(_get_raw_nodeattr(node, "folded_shape", []) or [])
+    dtype_name = _get_raw_nodeattr(node, "dataType", "")
+    if len(folded_shape) == 0 or dtype_name == "":
+        return 0
+    width = int(folded_shape[-1]) * DataType[dtype_name].bitwidth()
+    # AXI data FIFOs are configured in whole TDATA bytes in FINN's IPI backend.
+    return int(math.ceil(width / 8.0) * 8) if width > 0 else 0
+
+
+def _safe_fifo_depth(node):
+    depth = int(_get_raw_nodeattr(node, "depth", 0) or 0)
+    if _get_raw_nodeattr(node, "impl_style", "") == "vivado" and depth > 0:
+        return 1 << (depth - 1).bit_length()
+    return depth
+
+
+def _estimate_fifo_bram18_sites(depth, width):
+    if depth <= 0 or width <= 0:
+        return 0
+    if width == 1:
+        return int(math.ceil(depth / 16384.0))
+    if width == 2:
+        return int(math.ceil(depth / 8192.0))
+    if width <= 4:
+        return int(math.ceil(depth / 4096.0) * math.ceil(width / 4.0))
+    if width <= 9:
+        return int(math.ceil(depth / 2048.0) * math.ceil(width / 9.0))
+    if width <= 18 or depth > 512:
+        return int(math.ceil(depth / 1024.0) * math.ceil(width / 18.0))
+    return int(math.ceil(depth / 512.0) * math.ceil(width / 36.0))
+
+
+def _estimate_fifo_lutram_luts(depth, width):
+    if depth <= 0 or width <= 0:
+        return 0
+    return int((2 * math.ceil(math.log(depth, 2))) + (math.ceil(depth / 32.0) * math.ceil(width / 2.0)))
+
+
+def step_test_resnet_apply_ultra96_fifo_lutram_config(
+    model: ModelWrapper, cfg: DataflowBuildConfig
+) -> ModelWrapper:
+    """Move selected Ultra96 FIFOs from BRAM to LUTRAM.
+
+    The trim-160 Ultra96 build is failing only the combined BRAM tile DRC:
+      220 / 216 Block RAM tiles after opt_design.
+
+    LUTRAM still has comfortable headroom, so this pass runs after FIFO depth
+    sizing and changes selected Vivado AXI FIFOs from auto/block BRAM mapping
+    to distributed memory. We avoid post-synthesis names here because FINN/Vivado
+    may renumber FIFOs during stitched-IP generation.
+    """
+
+    board = getattr(cfg, "board", None)
+    if board != "Ultra96":
+        print(f"  Ultra96 FIFO LUTRAM relief: skipped for board={board}")
+        return model
+
+    # Moving a 32768-deep FIFO to distributed RAM fixes the BRAM DRC but creates
+    # a placer-hostile LUTRAM blob. Stay with small/medium FIFOs and over-target
+    # the BRAM relief instead.
+    target_bram18_sites = 32
+    max_fifo_depth = 4096
+    max_added_lutram_luts = 8000
+    candidates = []
+    skipped_non_vivado = 0
+    skipped_depth_monitor = 0
+    skipped_already_distributed = 0
+    skipped_small = 0
+    skipped_too_deep = 0
+
+    for idx, node in enumerate(model.graph.node):
+        if node.op_type != "StreamingFIFO_rtl":
+            continue
+
+        impl_style = _get_raw_nodeattr(node, "impl_style", "")
+        ram_style = _get_raw_nodeattr(node, "ram_style", "")
+        if impl_style != "vivado":
+            skipped_non_vivado += 1
+            continue
+        if int(_get_raw_nodeattr(node, "depth_monitor", 0) or 0) != 0:
+            skipped_depth_monitor += 1
+            continue
+        if ram_style == "distributed":
+            skipped_already_distributed += 1
+            continue
+
+        depth = _safe_fifo_depth(node)
+        width = _safe_fifo_width(node)
+        if depth > max_fifo_depth:
+            skipped_too_deep += 1
+            continue
+        bram18_sites = _estimate_fifo_bram18_sites(depth, width)
+        lutram_luts = _estimate_fifo_lutram_luts(depth, width)
+        if bram18_sites < 1:
+            skipped_small += 1
+            continue
+
+        efficiency = bram18_sites / max(lutram_luts, 1)
+        candidates.append(
+            {
+                "idx": idx,
+                "node": node,
+                "depth": depth,
+                "width": width,
+                "bram18": bram18_sites,
+                "lutram": lutram_luts,
+                "efficiency": efficiency,
+            }
+        )
+
+    candidates.sort(
+        key=lambda x: (
+            x["bram18"] > 2,
+            -x["efficiency"],
+            x["lutram"],
+            -x["bram18"],
+            x["idx"],
+        )
+    )
+
+    selected = []
+    recovered_bram18 = 0
+    added_lutram = 0
+    for cand in candidates:
+        if selected and recovered_bram18 >= target_bram18_sites:
+            break
+        if added_lutram + cand["lutram"] > max_added_lutram_luts:
+            continue
+
+        _set_raw_nodeattr(cand["node"], "ram_style", "distributed")
+        selected.append(cand)
+        recovered_bram18 += cand["bram18"]
+        added_lutram += cand["lutram"]
+
+    if selected:
+        selected_desc = ", ".join(
+            [
+                "%s:bram18_est~%d:lutram~%d:depth=%d:width=%d:idx=%d"
+                % (
+                    cand["node"].name,
+                    cand["bram18"],
+                    cand["lutram"],
+                    cand["depth"],
+                    cand["width"],
+                    cand["idx"],
+                )
+                for cand in selected
+            ]
+        )
+        print(
+            "  Ultra96 FIFO LUTRAM relief applied: "
+            f"FIFOs={len(selected)}, target_bram18={target_bram18_sites}, "
+            f"recovered_bram18_est~{recovered_bram18}, "
+            f"tile_relief_est~{recovered_bram18 / 2.0:.1f}, "
+            f"added_lutram~{added_lutram}, "
+            f"skipped_non_vivado={skipped_non_vivado}, "
+            f"skipped_depth_monitor={skipped_depth_monitor}, "
+            f"skipped_already_distributed={skipped_already_distributed}, "
+            f"skipped_small={skipped_small}, "
+            f"skipped_too_deep={skipped_too_deep}, "
+            f"max_fifo_depth={max_fifo_depth}, selected=[{selected_desc}]"
+        )
+    else:
+        print(
+            "  Ultra96 FIFO LUTRAM relief: no eligible nodes updated "
+            f"(skipped_non_vivado={skipped_non_vivado}, "
+            f"skipped_depth_monitor={skipped_depth_monitor}, "
+            f"skipped_already_distributed={skipped_already_distributed}, "
+            f"skipped_small={skipped_small}, "
+            f"skipped_too_deep={skipped_too_deep}, "
+            f"max_fifo_depth={max_fifo_depth})"
+        )
 
     return cleanup_model(model)
 
