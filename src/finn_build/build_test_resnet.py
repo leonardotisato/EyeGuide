@@ -53,6 +53,7 @@ try:
 
     from custom_steps_resnet18 import step_fundus_attach_preproc
     from custom_steps_test_resnet import (
+        step_test_resnet_fix_multithreshold_ties,
         step_test_resnet_streamline,
         step_test_resnet_lower,
         step_test_resnet_to_hw,
@@ -73,6 +74,7 @@ if not os.path.exists(args.onnx):
 # ---------------------------------------------------------------------------
 estimate_steps = [
     "step_qonnx_to_finn",
+    step_test_resnet_fix_multithreshold_ties,
     step_fundus_attach_preproc,
     "step_tidy_up",
     step_test_resnet_streamline,
