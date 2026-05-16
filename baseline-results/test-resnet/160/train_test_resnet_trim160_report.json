@@ -1,0 +1,148 @@
+{
+  "model": "test_resnet.r160_in1k",
+  "n_params": 373076,
+  "epochs": 67,
+  "best_val_f1": 79.7893,
+  "best_val_loss": 1.6747,
+  "checkpoint": "models/test_resnet_fp32_kd_trim160_ft.pth",
+  "student_init": "imagenet",
+  "init_checkpoint": null,
+  "teacher": "resnet18_from_resnet50_fp32_kd.pth (512x512 full-image strong train / test eval)",
+  "student_resolution": 160,
+  "teacher_resolution": 512,
+  "student_preprocess": {
+    "name": "trim_fundus_black_border",
+    "threshold": 8,
+    "pad_ratio": 0.01,
+    "min_pad_px": 4
+  },
+  "input_size": [
+    1,
+    3,
+    160,
+    160
+  ],
+  "kd_temperature": 3.0,
+  "kd_alpha": 0.25,
+  "use_weighted_loss": false,
+  "test_metrics": {
+    "point_metrics_pct": {
+      "accuracy_overall": 79.69924812030075,
+      "precision_weighted": 81.79269908593216,
+      "recall_weighted": 79.69924812030075,
+      "f1_weighted": 78.5368778439194
+    },
+    "bootstrap_ci_pct": {
+      "accuracy_overall": {
+        "mean": 79.75203007518796,
+        "lower": 72.93233082706767,
+        "upper": 86.46616541353383
+      },
+      "precision_macro": {
+        "mean": 85.0037282591705,
+        "lower": 79.12997491659311,
+        "upper": 90.27777777777777
+      },
+      "recall_macro": {
+        "mean": 71.68785501069482,
+        "lower": 63.53337443034318,
+        "upper": 79.88464969321062
+      },
+      "f1_macro": {
+        "mean": 73.92295631807245,
+        "lower": 64.54406247991773,
+        "upper": 82.58689435192916
+      }
+    },
+    "class_one_vs_rest_bootstrap_ci_pct": {
+      "healthy": {
+        "accuracy": {
+          "mean": 93.25518796992482,
+          "lower": 88.7218045112782,
+          "upper": 96.99248120300751
+        },
+        "precision": {
+          "mean": 85.197426329529,
+          "lower": 75.0,
+          "upper": 94.11764705882352
+        },
+        "recall": {
+          "mean": 97.90576839352165,
+          "lower": 93.10344827586206,
+          "upper": 100.0
+        },
+        "f1": {
+          "mean": 91.0285019876625,
+          "lower": 84.61538461538461,
+          "upper": 96.2419938735728
+        }
+      },
+      "melanoma": {
+        "accuracy": {
+          "mean": 91.74556390977443,
+          "lower": 86.46616541353383,
+          "upper": 96.2406015037594
+        },
+        "precision": {
+          "mean": 85.72333866313824,
+          "lower": 69.23076923076923,
+          "upper": 100.0
+        },
+        "recall": {
+          "mean": 69.35295270474798,
+          "lower": 50.0,
+          "upper": 86.66666666666667
+        },
+        "f1": {
+          "mean": 76.28735685238227,
+          "lower": 61.53061224489803,
+          "upper": 88.88888888888889
+        }
+      },
+      "nevus": {
+        "accuracy": {
+          "mean": 82.0030827067669,
+          "lower": 75.18796992481202,
+          "upper": 88.7218045112782
+        },
+        "precision": {
+          "mean": 69.3341480440148,
+          "lower": 56.36363636363636,
+          "upper": 81.63265306122449
+        },
+        "recall": {
+          "mean": 81.81754604114565,
+          "lower": 69.56521739130434,
+          "upper": 92.6829268292683
+        },
+        "f1": {
+          "mean": 74.86085595604429,
+          "lower": 64.19753086419753,
+          "upper": 84.0
+        }
+      },
+      "chrpe": {
+        "accuracy": {
+          "mean": 92.50022556390977,
+          "lower": 87.96992481203007,
+          "upper": 96.99248120300751
+        },
+        "precision": {
+          "mean": 99.76,
+          "lower": 100.0,
+          "upper": 100.0
+        },
+        "recall": {
+          "mean": 37.67515290336399,
+          "lower": 14.285714285714285,
+          "upper": 62.5
+        },
+        "f1": {
+          "mean": 53.51511047620077,
+          "lower": 25.0,
+          "upper": 76.92307692307693
+        }
+      }
+    }
+  }
+}
