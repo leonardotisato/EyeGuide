@@ -826,7 +826,7 @@ def step_test_resnet_apply_ultra96_fifo_lutram_config(
     # Moving a 32768-deep FIFO to distributed RAM fixes the BRAM DRC but creates
     # a placer-hostile LUTRAM blob. Stay with small/medium FIFOs and over-target
     # the BRAM relief instead.
-    target_bram18_sites = 32
+    target_bram18_sites = 31
     max_fifo_depth = 4096
     max_added_lutram_luts = 8000
     candidates = []
