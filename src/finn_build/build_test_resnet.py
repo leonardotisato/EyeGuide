@@ -32,9 +32,15 @@ parser.add_argument("--synth-clk-ns", type=float, default=10.0)
 parser.add_argument("--target-fps", type=int, default=1)
 parser.add_argument("--folding-config", default=None,
                     help="Manual folding config JSON. If None, uses target_fps auto-folding.")
+parser.add_argument("--manual-fifo-depths", action="store_true",
+                    help="Use FIFO depths from --folding-config instead of auto FIFO sizing.")
 parser.add_argument("--board", default="Ultra96",
                     help="Target board (default: Ultra96 = xczu3eg-sbva484-1-e)")
 args = parser.parse_args()
+
+if args.manual_fifo_depths and args.folding_config is None:
+    print("\n[ERROR] --manual-fifo-depths requires --folding-config.")
+    sys.exit(1)
 
 try:
     from finn.builder.build_dataflow_config import (
@@ -181,6 +187,10 @@ if args.folding_config:
     print(f"  Folding: {args.folding_config}")
 else:
     print(f"  Folding: auto (target_fps_parallelization)")
+if args.manual_fifo_depths:
+    print("  FIFO:    manual depths from folding config")
+else:
+    print("  FIFO:    auto sizing (largefifo_rtlsim)")
 print(f"  Output:  {args.output_dir}")
 print(f"  Steps:   {' -> '.join(step_names(display_steps))}")
 print(f"{'=' * 60}\n")
@@ -209,9 +219,11 @@ cfg = DataflowBuildConfig(
     shell_flow_type=shell_flow_type,
     target_fps=args.target_fps,
     folding_config_file=args.folding_config,
+    auto_fifo_depths=not args.manual_fifo_depths,
     generate_outputs=generate_outputs,
     save_intermediate_models=True,
     split_large_fifos=True,
+    default_swg_exception=True,
 )
 
 build_dataflow_cfg(args.onnx, cfg)
