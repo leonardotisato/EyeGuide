@@ -119,9 +119,8 @@ from finn.transformation.move_reshape import RemoveCNVtoFCFlatten
 # This transform converts AveragePool → Trunc to:
 #   Div(output_scale) → QuantAvgPool2d → Mul(output_scale)
 #
-# During streamlining the upstream Mul(input_scale) → Div(output_scale) collapses
-# to Mul(1) → removed, leaving QuantAvgPool2d with integer input so InferPool fires.
-# (input_scale == output_scale for TruncAvgPool2d: "preserves the scale of the input")
+# QuantAvgPool2d operates on the pre-pool integer activation stream. Its input
+# bit width must account for the k*k average-pool reduction.
 # ---------------------------------------------------------------------------
 class ConvertAvgPoolTruncToQuantAvgPool(Transformation):
     """
@@ -129,9 +128,8 @@ class ConvertAvgPoolTruncToQuantAvgPool(Transformation):
 
     Run this at the START of the streamline step, before ConvertDivToMul consumes
     the Div node we insert.  The Div(out_scale) → QuantAvgPool2d → Mul(out_scale)
-    pattern is later cleaned up by streamlining:
-      Mul(in_s) → Div(out_s=in_s) → [CollapseRepeatedMul] → Mul(1) → [RemoveIdentityOps]
-    leaving QuantAvgPool2d with a UINT8 integer input, which InferPool can handle.
+    QuantAvgPool2d uses an ibits value reduced by the k*k pool area, matching
+    FINN's built-in AvgPoolAndTruncToQuantAvgPool converter.
     """
 
     def apply(self, model):
@@ -182,8 +180,12 @@ class ConvertAvgPoolTruncToQuantAvgPool(Transformation):
             if float(zero_pt.flatten()[0]) != 0:
                 continue
 
-            ibits = int(in_bits_t.flatten()[0])
+            trunc_in_bits = int(in_bits_t.flatten()[0])
             obits = int(out_bits_t.flatten()[0])
+            k2 = k_s * k_s
+            ibits = int(math.floor(math.log((2**trunc_in_bits) / k2, 2)))
+            if ibits <= 0:
+                continue
 
             rounding_attr = get_by_name(trunc_node.attribute, "rounding_mode")
             if rounding_attr is None or rounding_attr.s.upper() != b"FLOOR":

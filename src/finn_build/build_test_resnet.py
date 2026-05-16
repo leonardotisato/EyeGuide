@@ -211,6 +211,7 @@ cfg = DataflowBuildConfig(
     folding_config_file=args.folding_config,
     generate_outputs=generate_outputs,
     save_intermediate_models=True,
+    split_large_fifos=True,
 )
 
 build_dataflow_cfg(args.onnx, cfg)
