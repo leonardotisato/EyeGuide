@@ -8,8 +8,9 @@ CANDIDATES=()
 
 # Default Xilinx toolchain location/version for the shared FINN build host.
 # Allow callers to override these before launching the script.
-: "${FINN_XILINX_PATH:=/home/xilinx}"
-: "${FINN_XILINX_VERSION:=2024.2}"
+export FINN_XILINX_PATH="${FINN_XILINX_PATH:-/home/xilinx}"
+export FINN_XILINX_VERSION="${FINN_XILINX_VERSION:-2024.2}"
+export FINN_TCLLIBPATH="${FINN_TCLLIBPATH:-/home/xilinx/Vivado/2024.2/data/XilinxTclStore/tclapp}"
 
 if [ -n "${HPPS_FINN_ROOT:-}" ]; then
   CANDIDATES+=("$HPPS_FINN_ROOT")
@@ -50,7 +51,7 @@ fi
 # Mount this repo into the FINN container as-is so local build scripts and models
 # are accessible from the same absolute path inside the container. Override the
 # container workdir to the repo root when launching the default interactive shell.
-export FINN_DOCKER_EXTRA="${FINN_DOCKER_EXTRA:-} -v $REPO_DIR:$REPO_DIR -w $REPO_DIR "
+export FINN_DOCKER_EXTRA="${FINN_DOCKER_EXTRA:-} -v $REPO_DIR:$REPO_DIR -w $REPO_DIR -e TCLLIBPATH=$FINN_TCLLIBPATH "
 
 cd "$FINN_ROOT"
 
