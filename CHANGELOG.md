@@ -1,4 +1,105 @@
 
+## 2026-05-21 - trim160 board preprocessing fix
+
+Final board validation for `test_resnet_trim160_6w6a`.
+
+Final fix:
+- Regenerated the board payload with cv2/OpenCV resize to match the software reference preprocessing
+
+### Results
+
+| Target | Accuracy | Weighted F1 | Macro F1 | Throughput |
+|---|---:|---:|---:|---:|
+| Software QAT reference | 81.20% | 80.39% | 76.77% | - |
+| Ultra96-v2-G | 81.20% | 80.39% | 76.77% | 3.39 img/s |
+
+Hardware summary:
+- Input payload: trimmed fundus images, 160x160 cv2 resize, uint8 NHWC
+- Clock: 100 MHz
+- Timing: clean post-route timing
+- Resources: 56,892 LUTs, 56,984 FFs, 215.5 / 216 BRAM36, 15 DSPs
+
+## 2026-05-20 - MultiThreshold rounding debug
+
+Second board validation for the fitting trim160 6w6a Ultra96 build.
+
+Notes:
+- Throughput testing confirmed that the bitfile executed correctly on board
+- Initial board predictions were functionally wrong despite successful synthesis  (75% accuracy) 
+- Isolated the mismatch to `Quant` -> `MultiThreshold` conversion
+- Patched the conversion to preserve tie-even rounding behavior
+- Accuracy improved, but still did not fully match the software reference (76% accuracy)
+
+## 2026-05-18 - QuantAvgPool conversion debug
+
+First functional validation of the fitting trim160 design exposed incorrect model outputs (12% accuracy).
+
+Notes:
+- Throughput testing confirmed that the bitfile executed correctly on board
+- The custom `AveragePool -> Trunc` to `QuantAvgPool2d` conversion was already present
+- The conversion was using the wrong input bit width for the trunc/pooling path
+- This made the lowered QuantAvgPool path numerically inconsistent with the QONNX/software model
+- Fixed the custom conversion so `QuantAvgPool2d` uses the correct activation bit width
+
+## 2026-05-17 - trim160 Ultra96 fit
+
+Retried Ultra96 synthesis with the trimmed 160x160 6w6a model.
+
+Notes:
+- Identified small FIFO queues as the main source of inefficient BRAM packing
+- Moved selected small FIFOs to LUTRAM instead of moving large FIFOs or relying on URAM
+- Synthesis completed with the design fitting very close to the BRAM limit
+
+## 2026-05-15 - trim160
+
+Introduced the trimmed 160x160 model as the practical Ultra96 deployment target.
+
+### Results
+
+| Run | Weighted F1 | Macro F1 | Accuracy |
+|---|---:|---:|---:|
+| `trim160 6w6a` QAT | 80.39% | 76.77% | 81.20% |
+
+## 2026-05-12 - trim192 Kria resource experiments
+
+Initial synthesis targetting kria failed due to BRAM overutilization.
+Resource experiments for the trimmed 192x192 model.
+
+Notes:
+- Tried moving larger FIFO storage across BRAM, URAM, and LUTRAM
+- URAM placement did not give a clean fit and sometimes introduced synthesis issues
+
+
+## 2026-05-09 - trim192 model candidate
+
+Introduced fundus-border trimming plus 192x192 resize to reduce hardware cost (reduce FIFO queues depth).
+
+### Results
+
+| Run | Weighted F1 | Macro F1 | Accuracy |
+|---|---:|---:|---:|
+| `trim192 8w8a` QAT | 84.58% | 82.21% | 84.96% |
+| `trim192 6w6a` QAT | 81.49% | 79.05% | 81.95% |
+
+Hardware fitting failed on Ultra96 due to BRAM overutilization, moved to kria again.
+
+## 2026-05-06 - Corrected 6-bit build no longer fits
+
+After fixing the board-flow direction, the corrected 6-bit build no longer fit Ultra96 due to BRAM overutilization.
+
+Notes:
+- Temporarily moved the target to Kria
+- Started URAM/LUTRAM placement experiments
+- Resource behavior changed significantly after using the corrected FIFO/DMA flow
+
+## 2026-05-03 - Board deadlock and FINN pipeline rollback
+
+The first synthesized 6-bit design reached board testing but deadlocked.
+
+Notes:
+- The older flow created a problematic multi-DMA setup
+- Reworked the build toward the corrected single-input-DMA FINN pipeline
+- This fixed the direction of the board flow, but invalidated earlier fit assumptions
 
 ## 2026-04-24 - test_resnet KD-QAT sweep
 
@@ -27,10 +128,10 @@ First canonical QAT sweep from the current FP32 branch.
 | `6w6a` KD-QAT | **87.53%** | **84.74%** | **87.97%** | 92 | 1.7546 | 76.06% |
 | `4w4a` KD-QAT | 52.45% | 43.00% | 57.14% | 178 | 3.4506 | 54.56% |
 
-Checkpoints:
-- `models/test_resnet_8w8a_qat.pth`
-- `models/test_resnet_6w6a_qat.pth`
-- `models/test_resnet_4w4a_qat.pth`
+Notes:
+- 4-bit QAT was discarded because accuracy did not recover enough
+- 8-bit remained useful as a quality reference, but did not fit Ultra96
+- 6-bit became the only realistic deployment candidate
 
 ## 2026-04-23 - test_resnet FP32 KD with aligned hypers
 
