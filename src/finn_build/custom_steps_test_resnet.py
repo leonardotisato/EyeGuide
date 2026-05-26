@@ -18,19 +18,21 @@ Must run inside the FINN Docker container.
 """
 
 import math
+from collections import Counter
+
 import numpy as np
+import torch
+import torch.nn as nn
+from brevitas.export import export_qonnx
 from onnx import TensorProto, helper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import get_by_name
 
-from custom_steps_resnet18 import (
-    graph_summary,
-    FixThresholdDataTypes,
-)
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.datatype import DataType
 from qonnx.util.cleanup import cleanup_model
 from qonnx.transformation.base import Transformation
+from qonnx.transformation.merge_onnx_models import MergeONNXModels
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_steps import VerificationStepType, verify_step
 
@@ -96,6 +98,80 @@ from qonnx.transformation.double_to_single_float import DoubleToSingleFloat
 from qonnx.transformation.general import GiveUniqueNodeNames, SortGraph
 from qonnx.transformation.infer_data_layouts import InferDataLayouts
 from finn.transformation.move_reshape import RemoveCNVtoFCFlatten
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers for this test_resnet pipeline
+# ---------------------------------------------------------------------------
+class FixThresholdDataTypes(Transformation):
+    """Ensure integer-valued MultiThreshold initializers get integer datatypes."""
+
+    def apply(self, model):
+        graph_modified = False
+        for node in model.graph.node:
+            if node.op_type != "MultiThreshold":
+                continue
+
+            input_dtype = model.get_tensor_datatype(node.input[0])
+            threshold_dtype = model.get_tensor_datatype(node.input[1])
+            if input_dtype.is_integer() and not threshold_dtype.is_integer():
+                thresholds = model.get_initializer(node.input[1])
+                if thresholds is not None and np.all(thresholds == np.ceil(thresholds)):
+                    model.set_tensor_datatype(node.input[1], input_dtype)
+                    graph_modified = True
+
+        return (model, graph_modified)
+
+
+HW_DOMAINS = {
+    "finn.custom_op.fpgadataflow",
+    "finn.custom_op.fpgadataflow.hlsbackend",
+    "finn.custom_op.fpgadataflow.rtlbackend",
+}
+
+
+def graph_summary(model, label=""):
+    """Print a compact HW/non-HW node summary for build debugging."""
+    all_nodes = list(model.graph.node)
+    hw_nodes = [node for node in all_nodes if node.domain in HW_DOMAINS]
+    non_hw_nodes = [node for node in all_nodes if node.domain not in HW_DOMAINS]
+    print(
+        f"  [{label}] Total={len(all_nodes)}  "
+        f"HW={len(hw_nodes)}  Non-HW={len(non_hw_nodes)}"
+    )
+    if non_hw_nodes:
+        counts = Counter(node.op_type for node in non_hw_nodes)
+        print(f"  [{label}] Non-HW: {dict(counts)}")
+    return non_hw_nodes
+
+
+class FundusPreProc(nn.Module):
+    """uint8 [0,255] input -> ImageNet-normalized float tensor."""
+
+    def __init__(self):
+        super().__init__()
+        mean = torch.tensor([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
+        self.register_buffer("mean", mean)
+        self.register_buffer("std", std)
+
+    def forward(self, x):
+        x = x / 255.0
+        return (x - self.mean) / self.std
+
+
+def step_fundus_attach_preproc(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """Attach the preprocessing graph used during test_resnet training."""
+    model = model.transform(InferShapes())
+
+    shape = tuple(
+        dim.dim_value for dim in model.graph.input[0].type.tensor_type.shape.dim
+    )
+    pre_proc = export_qonnx(FundusPreProc(), input_shape=shape, opset_version=11)
+    pre_proc_qonnx = ModelWrapper(pre_proc)
+    model = model.transform(MergeONNXModels(pre_proc_qonnx))
+
+    return cleanup_model(model)
 
 
 # ---------------------------------------------------------------------------

@@ -51,8 +51,8 @@ try:
     from finn.builder.build_dataflow import build_dataflow_cfg
     from finn.util.basic import pynq_part_map, alveo_part_map
 
-    from custom_steps_resnet18 import step_fundus_attach_preproc
     from custom_steps_test_resnet import (
+        step_fundus_attach_preproc,
         step_test_resnet_fix_multithreshold_ties,
         step_test_resnet_streamline,
         step_test_resnet_lower,
