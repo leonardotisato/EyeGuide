@@ -57,7 +57,7 @@ try:
         step_test_resnet_streamline,
         step_test_resnet_lower,
         step_test_resnet_to_hw,
-        step_test_resnet_apply_ultra96_fifo_lutram_config,
+        step_test_resnet_apply_fifo_lutram_config,
     )
 except ImportError as e:
     print(f"\n[ERROR] Import failed: {e}\n"
@@ -127,7 +127,7 @@ full_steps = estimate_steps + [
     "step_hw_codegen",
     "step_hw_ipgen",
     "step_set_fifo_depths",
-    step_test_resnet_apply_ultra96_fifo_lutram_config,
+    step_test_resnet_apply_fifo_lutram_config,
     "step_create_stitched_ip",
     "step_synthesize_bitfile",
     "step_make_pynq_driver",

@@ -929,31 +929,43 @@ def _estimate_fifo_lutram_luts(depth, width):
     return int((2 * math.ceil(math.log(depth, 2))) + (math.ceil(depth / 32.0) * math.ceil(width / 2.0)))
 
 
-def step_test_resnet_apply_ultra96_fifo_lutram_config(
+def step_test_resnet_apply_fifo_lutram_config(
     model: ModelWrapper, cfg: DataflowBuildConfig
 ) -> ModelWrapper:
-    """Move selected Ultra96 FIFOs from BRAM to LUTRAM.
+    """Move selected small FIFOs from BRAM to LUTRAM.
 
-    The trim-160 Ultra96 build is failing only the combined BRAM tile DRC:
-      220 / 216 Block RAM tiles after opt_design.
-
-    LUTRAM still has comfortable headroom, so this pass runs after FIFO depth
-    sizing and changes selected Vivado AXI FIFOs from auto/block BRAM mapping
-    to distributed memory. We avoid post-synthesis names here because FINN/Vivado
-    may renumber FIFOs during stitched-IP generation.
+    The trim-160 builds are close to fitting on both Ultra96 and KV260 but can
+    fail final Vivado DRC due to BRAM/FIFO site pressure. LUTRAM has headroom on
+    both targets, so this pass runs after FIFO depth sizing and changes selected
+    Vivado FIFOs from auto/block BRAM mapping to distributed memory. We avoid
+    post-synthesis names here because FINN/Vivado may renumber FIFOs during
+    stitched-IP generation.
     """
 
     board = getattr(cfg, "board", None)
-    if board != "Ultra96":
-        print(f"  Ultra96 FIFO LUTRAM relief: skipped for board={board}")
+    board_settings = {
+        "Ultra96": {
+            "target_bram18_sites": 31,
+            "max_fifo_depth": 4096,
+            "max_added_lutram_luts": 8000,
+        },
+        "KV260_SOM": {
+            "target_bram18_sites": 10,
+            "max_fifo_depth": 2048,
+            "max_added_lutram_luts": 2500,
+        },
+    }
+    if board not in board_settings:
+        print(f"  FIFO LUTRAM relief: skipped for board={board}")
         return model
 
+    settings = board_settings[board]
     # Moving a 32768-deep FIFO to distributed RAM fixes the BRAM DRC but creates
     # a placer-hostile LUTRAM blob. Stay with small/medium FIFOs and over-target
     # the BRAM relief instead.
-    target_bram18_sites = 31
-    max_fifo_depth = 4096
-    max_added_lutram_luts = 8000
+    target_bram18_sites = settings["target_bram18_sites"]
+    max_fifo_depth = settings["max_fifo_depth"]
+    max_added_lutram_luts = settings["max_added_lutram_luts"]
     candidates = []
     skipped_non_vivado = 0
     skipped_depth_monitor = 0
@@ -1041,7 +1053,7 @@ def step_test_resnet_apply_ultra96_fifo_lutram_config(
             ]
         )
         print(
-            "  Ultra96 FIFO LUTRAM relief applied: "
+            f"  FIFO LUTRAM relief applied for {board}: "
             f"FIFOs={len(selected)}, target_bram18={target_bram18_sites}, "
             f"recovered_bram18_est~{recovered_bram18}, "
             f"tile_relief_est~{recovered_bram18 / 2.0:.1f}, "
@@ -1055,7 +1067,7 @@ def step_test_resnet_apply_ultra96_fifo_lutram_config(
         )
     else:
         print(
-            "  Ultra96 FIFO LUTRAM relief: no eligible nodes updated "
+            f"  FIFO LUTRAM relief for {board}: no eligible nodes updated "
             f"(skipped_non_vivado={skipped_non_vivado}, "
             f"skipped_depth_monitor={skipped_depth_monitor}, "
             f"skipped_already_distributed={skipped_already_distributed}, "
@@ -1065,5 +1077,10 @@ def step_test_resnet_apply_ultra96_fifo_lutram_config(
         )
 
     return cleanup_model(model)
+
+
+step_test_resnet_apply_ultra96_fifo_lutram_config = (
+    step_test_resnet_apply_fifo_lutram_config
+)
 
 
