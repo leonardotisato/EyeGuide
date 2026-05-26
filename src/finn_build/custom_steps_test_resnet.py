@@ -929,16 +929,29 @@ def _estimate_fifo_lutram_luts(depth, width):
     return int((2 * math.ceil(math.log(depth, 2))) + (math.ceil(depth / 32.0) * math.ceil(width / 2.0)))
 
 
-def step_test_resnet_apply_fifo_lutram_config(
+def _estimate_fifo_uram_sites(depth, width):
+    if depth <= 0 or width <= 0:
+        return 0
+    # URAM288 is typically organized as 4096 x 72. This is an estimate only:
+    # Vivado FIFO IP may add implementation overhead, but it is good enough for
+    # deciding whether a deep FIFO is a sensible URAM candidate.
+    return int(math.ceil(depth / 4096.0) * math.ceil(width / 72.0))
+
+
+def step_test_resnet_apply_bram_relief_config(
     model: ModelWrapper, cfg: DataflowBuildConfig
 ) -> ModelWrapper:
-    """Move selected small FIFOs from BRAM to LUTRAM.
+    """Move selected FIFOs away from scarce BRAM.
 
     The trim-160 builds are close to fitting on both Ultra96 and KV260 but can
-    fail final Vivado DRC due to BRAM/FIFO site pressure. LUTRAM has headroom on
-    both targets, so this pass runs after FIFO depth sizing and changes selected
-    Vivado FIFOs from auto/block BRAM mapping to distributed memory. We avoid
-    post-synthesis names here because FINN/Vivado may renumber FIFOs during
+    fail final Vivado DRC due to BRAM/FIFO site pressure. This pass runs after
+    FIFO depth sizing and applies two structural rules:
+
+    1. short/medium Vivado FIFOs -> LUTRAM when there is LUTRAM headroom;
+    2. very deep KV260 Vivado FIFOs -> URAM, which is unused in the baseline.
+
+    Selection intentionally uses depth/width/resource estimates instead of
+    post-synthesis FIFO names, since FINN/Vivado may renumber FIFOs during
     stitched-IP generation.
     """
 
@@ -953,16 +966,17 @@ def step_test_resnet_apply_fifo_lutram_config(
             "target_bram18_sites": 10,
             "max_fifo_depth": 2048,
             "max_added_lutram_luts": 2500,
+            "uram_min_fifo_depth": 32768,
+            "max_added_uram_sites": 40,
         },
     }
     if board not in board_settings:
-        print(f"  FIFO LUTRAM relief: skipped for board={board}")
+        print(f"  FIFO BRAM relief: skipped for board={board}")
         return model
 
     settings = board_settings[board]
-    # Moving a 32768-deep FIFO to distributed RAM fixes the BRAM DRC but creates
-    # a placer-hostile LUTRAM blob. Stay with small/medium FIFOs and over-target
-    # the BRAM relief instead.
+    # Moving a 32768-deep FIFO to distributed RAM fixes BRAM DRC but creates a
+    # placer-hostile LUTRAM blob. Keep LUTRAM relief for small/medium FIFOs.
     target_bram18_sites = settings["target_bram18_sites"]
     max_fifo_depth = settings["max_fifo_depth"]
     max_added_lutram_luts = settings["max_added_lutram_luts"]
@@ -1076,11 +1090,125 @@ def step_test_resnet_apply_fifo_lutram_config(
             f"max_fifo_depth={max_fifo_depth})"
         )
 
+    uram_min_fifo_depth = settings.get("uram_min_fifo_depth")
+    max_added_uram_sites = settings.get("max_added_uram_sites", 0)
+    if uram_min_fifo_depth is not None and max_added_uram_sites > 0:
+        uram_candidates = []
+        skipped_uram_non_vivado = 0
+        skipped_uram_depth_monitor = 0
+        skipped_uram_style = 0
+        skipped_uram_too_shallow = 0
+        skipped_uram_no_estimate = 0
+
+        for idx, node in enumerate(model.graph.node):
+            if node.op_type != "StreamingFIFO_rtl":
+                continue
+
+            impl_style = _get_raw_nodeattr(node, "impl_style", "")
+            ram_style = _get_raw_nodeattr(node, "ram_style", "")
+            if impl_style != "vivado":
+                skipped_uram_non_vivado += 1
+                continue
+            if int(_get_raw_nodeattr(node, "depth_monitor", 0) or 0) != 0:
+                skipped_uram_depth_monitor += 1
+                continue
+            if ram_style not in ("auto", "block"):
+                skipped_uram_style += 1
+                continue
+
+            depth = _safe_fifo_depth(node)
+            width = _safe_fifo_width(node)
+            if depth < uram_min_fifo_depth:
+                skipped_uram_too_shallow += 1
+                continue
+
+            bram18_sites = _estimate_fifo_bram18_sites(depth, width)
+            uram_sites = _estimate_fifo_uram_sites(depth, width)
+            if bram18_sites < 1 or uram_sites < 1:
+                skipped_uram_no_estimate += 1
+                continue
+
+            uram_candidates.append(
+                {
+                    "idx": idx,
+                    "node": node,
+                    "depth": depth,
+                    "width": width,
+                    "bram18": bram18_sites,
+                    "uram": uram_sites,
+                    "efficiency": bram18_sites / uram_sites,
+                }
+            )
+
+        uram_candidates.sort(
+            key=lambda x: (
+                -x["efficiency"],
+                -x["bram18"],
+                x["uram"],
+                x["idx"],
+            )
+        )
+
+        uram_selected = []
+        recovered_uram_bram18 = 0
+        added_uram = 0
+        for cand in uram_candidates:
+            if added_uram + cand["uram"] > max_added_uram_sites:
+                continue
+
+            _set_raw_nodeattr(cand["node"], "ram_style", "ultra")
+            uram_selected.append(cand)
+            recovered_uram_bram18 += cand["bram18"]
+            added_uram += cand["uram"]
+
+        if uram_selected:
+            selected_desc = ", ".join(
+                [
+                    "%s:bram18_est~%d:uram_est~%d:depth=%d:width=%d:idx=%d"
+                    % (
+                        cand["node"].name,
+                        cand["bram18"],
+                        cand["uram"],
+                        cand["depth"],
+                        cand["width"],
+                        cand["idx"],
+                    )
+                    for cand in uram_selected
+                ]
+            )
+            print(
+                f"  FIFO URAM relief applied for {board}: "
+                f"FIFOs={len(uram_selected)}, "
+                f"recovered_bram18_est~{recovered_uram_bram18}, "
+                f"tile_relief_est~{recovered_uram_bram18 / 2.0:.1f}, "
+                f"added_uram_est~{added_uram}, "
+                f"uram_min_fifo_depth={uram_min_fifo_depth}, "
+                f"max_added_uram_sites={max_added_uram_sites}, "
+                f"skipped_non_vivado={skipped_uram_non_vivado}, "
+                f"skipped_depth_monitor={skipped_uram_depth_monitor}, "
+                f"skipped_style={skipped_uram_style}, "
+                f"skipped_too_shallow={skipped_uram_too_shallow}, "
+                f"skipped_no_estimate={skipped_uram_no_estimate}, "
+                f"selected=[{selected_desc}]"
+            )
+        else:
+            print(
+                f"  FIFO URAM relief for {board}: no eligible nodes updated "
+                f"(uram_min_fifo_depth={uram_min_fifo_depth}, "
+                f"max_added_uram_sites={max_added_uram_sites}, "
+                f"skipped_non_vivado={skipped_uram_non_vivado}, "
+                f"skipped_depth_monitor={skipped_uram_depth_monitor}, "
+                f"skipped_style={skipped_uram_style}, "
+                f"skipped_too_shallow={skipped_uram_too_shallow}, "
+                f"skipped_no_estimate={skipped_uram_no_estimate})"
+            )
+
     return cleanup_model(model)
 
 
+step_test_resnet_apply_fifo_lutram_config = step_test_resnet_apply_bram_relief_config
 step_test_resnet_apply_ultra96_fifo_lutram_config = (
-    step_test_resnet_apply_fifo_lutram_config
+    step_test_resnet_apply_bram_relief_config
 )
 
 
