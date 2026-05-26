@@ -1,5 +1,5 @@
 """
-FINN Dataflow Build for QAT test_resnet -> Ultra96 bitstream.
+FINN Dataflow Build for QAT test_resnet -> Kria KV260 bitstream.
 
 Defaults to the current trim-160 fit experiment (`6w6a`), while still allowing
 explicit `--onnx` overrides such as `test_resnet_trim192_6w6a`.
@@ -18,7 +18,7 @@ import os
 import sys
 
 parser = argparse.ArgumentParser(
-    description="FINN dataflow build for QAT test_resnet -> Ultra96."
+    description="FINN dataflow build for QAT test_resnet -> Kria KV260."
 )
 parser.add_argument("--onnx", default="models/test_resnet_trim160_6w6a.onnx")
 parser.add_argument("--output-dir", default=None,
@@ -34,8 +34,8 @@ parser.add_argument("--folding-config", default=None,
                     help="Manual folding config JSON. If None, uses target_fps auto-folding.")
 parser.add_argument("--manual-fifo-depths", action="store_true",
                     help="Use FIFO depths from --folding-config instead of auto FIFO sizing.")
-parser.add_argument("--board", default="Ultra96",
-                    help="Target board (default: Ultra96 = xczu3eg-sbva484-1-e)")
+parser.add_argument("--board", default="KV260_SOM",
+                    help="Target board (default: KV260_SOM = xck26-sfvc784-2LV-c)")
 args = parser.parse_args()
 
 if args.manual_fifo_depths and args.folding_config is None:
