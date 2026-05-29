@@ -40,6 +40,7 @@ try:
     from resource_policy import (
         choose_bram_to_lutram_relievers,
         choose_fifo_uram_relievers,
+        choose_lutram_budget_relievers,
         estimate_bram18_sites,
         estimate_fifo_bram18_sites,
         estimate_fifo_lutram_luts,
@@ -50,6 +51,7 @@ except ImportError:
     from src.finn_build.resource_policy import (
         choose_bram_to_lutram_relievers,
         choose_fifo_uram_relievers,
+        choose_lutram_budget_relievers,
         estimate_bram18_sites,
         estimate_fifo_bram18_sites,
         estimate_fifo_lutram_luts,
@@ -994,7 +996,6 @@ def step_test_resnet_apply_threshold_lutram_config(
         print(f"  Thresholding LUTRAM relief: skipped for board={board}")
         return model
 
-    target_bram18_sites = 14
     max_added_lutram_luts = 9000
     min_bram18_sites = 2
     threshold_candidates = []
@@ -1033,9 +1034,8 @@ def step_test_resnet_apply_threshold_lutram_config(
             }
         )
 
-    threshold_selected = choose_bram_to_lutram_relievers(
+    threshold_selected = choose_lutram_budget_relievers(
         threshold_candidates,
-        target_bram18=target_bram18_sites,
         max_lutram=max_added_lutram_luts,
     )
     for cand in threshold_selected:
@@ -1045,7 +1045,7 @@ def step_test_resnet_apply_threshold_lutram_config(
     if threshold_selected:
         selected_desc = ", ".join(
             [
-                "%s:bram18_est~%d:lutram~%d:banks=%d:depth=%d:width=%d:idx=%d"
+                "%s:bram_score~%d:lutram~%d:banks=%d:depth=%d:width=%d:idx=%d"
                 % (
                     cand["name"],
                     cand["bram18"],
@@ -1060,8 +1060,8 @@ def step_test_resnet_apply_threshold_lutram_config(
         )
         print(
             f"  Thresholding LUTRAM relief applied for {board}: "
-            f"nodes={len(threshold_selected)}, target_bram18={target_bram18_sites}, "
-            f"recovered_bram18_est~{sum(cand['bram18'] for cand in threshold_selected)}, "
+            f"nodes={len(threshold_selected)}, "
+            f"bram_score~{sum(cand['bram18'] for cand in threshold_selected)}, "
             f"added_lutram~{sum(cand['lutram'] for cand in threshold_selected)}, "
             f"max_added_lutram={max_added_lutram_luts}, "
             f"skipped_no_shape={skipped_threshold_shape}, "
@@ -1072,8 +1072,7 @@ def step_test_resnet_apply_threshold_lutram_config(
     else:
         print(
             f"  Thresholding LUTRAM relief for {board}: no eligible nodes updated "
-            f"(target_bram18={target_bram18_sites}, "
-            f"max_added_lutram={max_added_lutram_luts}, "
+            f"(max_added_lutram={max_added_lutram_luts}, "
             f"skipped_no_shape={skipped_threshold_shape}, "
             f"skipped_too_shallow={skipped_threshold_too_shallow}, "
             f"skipped_too_small={skipped_threshold_small})"
