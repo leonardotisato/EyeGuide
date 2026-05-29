@@ -57,6 +57,7 @@ try:
         step_test_resnet_streamline,
         step_test_resnet_lower,
         step_test_resnet_to_hw,
+        step_test_resnet_apply_threshold_lutram_config,
         step_test_resnet_apply_bram_relief_config,
     )
 except ImportError as e:
@@ -83,6 +84,7 @@ estimate_steps = [
     "step_create_dataflow_partition",
     "step_specialize_layers",
     "step_minimize_bit_width",
+    step_test_resnet_apply_threshold_lutram_config,
     "step_generate_estimate_reports",
 ]
 
