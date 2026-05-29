@@ -13,7 +13,10 @@
   "hardware": {
     "board": "Ultra96",
     "fpga_part": "xczu3eg-sbva484-1-e",
-    "clock_mhz": 99.999
+    "finn_requested_clock_period_ns": 5.0,
+    "vivado_routed_clock_period_ns": 5.333,
+    "vivado_routed_clock_mhz": 187.512,
+    "measured_board_clock_mhz": 187.498125
   },
   "input_payload": {
     "name": "board_accuracy_payload_trim160_cv2",
@@ -51,26 +54,26 @@
     "source_file": "baseline-results/qat-test-resnet/160/6w6a/qat_test_resnet_trim160_6w6a_report.json"
   },
   "standalone_throughput": {
-    "batch_size": 512,
-    "runtime_ms": 151027.03499794006,
-    "throughput_images_per_s": 3.3901215104102613,
-    "fclk_mhz": 99.999,
-    "dram_in_bandwidth_mb_s": 0.26036133199950806,
-    "dram_out_bandwidth_mb_s": 0.0006509033299987703,
+    "batch_size": 256,
+    "runtime_ms": 40281.078815460205,
+    "throughput_images_per_s": 6.355341205552447,
+    "fclk_mhz": 187.498125,
+    "dram_in_bandwidth_mb_s": 0.4880902045864279,
+    "dram_out_bandwidth_mb_s": 0.00122022551146607,
     "host_overhead_ms": {
-      "fold_input": 0.20766258239746094,
-      "pack_input": 0.12063980102539062,
-      "copy_input_data_to_device": 65.98544120788574,
-      "copy_output_data_from_device": 0.2994537353515625,
-      "unpack_output": 12269.673109054565,
-      "unfold_output": 0.10442733764648438
+      "fold_input": 0.17571449279785156,
+      "pack_input": 0.11396408081054688,
+      "copy_input_data_to_device": 33.65182876586914,
+      "copy_output_data_from_device": 0.25725364685058594,
+      "unpack_output": 5300.132274627686,
+      "unfold_output": 0.1010894775390625
     }
   },
   "post_route_timing": {
-    "clock_period_ns": 10.0,
+    "clock_period_ns": 5.333,
     "setup": {
       "failing_endpoints": 0,
-      "worst_slack_ns": 4.213,
+      "worst_slack_ns": 0.296,
       "total_violation_ns": 0.0
     },
     "hold": {
@@ -80,23 +83,31 @@
     },
     "pulse_width": {
       "failing_endpoints": 0,
-      "worst_slack_ns": 3.5,
+      "worst_slack_ns": 1.166,
       "total_violation_ns": 0.0
     }
   },
   "post_route_resources": {
     "LUT": {
-      "used": 56892,
+      "used": 57058,
       "available": 70560,
-      "utilization_percent": 80.6293
+      "utilization_percent": 80.8645
+    },
+    "LUTRAM": {
+      "used": 14160
     },
     "SRL": {
-      "used": 8458
+      "used": 8456
+    },
+    "LUTRAM_plus_SRL": {
+      "used": 22616,
+      "available": 28800,
+      "utilization_percent": 78.5278
     },
     "FF": {
-      "used": 56984,
+      "used": 57078,
       "available": 141120,
-      "utilization_percent": 40.3798
+      "utilization_percent": 40.4464
     },
     "BRAM": {
       "BRAM_36K": 178,
