@@ -10,34 +10,6 @@ import math
 from typing import Dict, Iterable, List, Mapping, Sequence
 
 
-BRAM36_DATA_MODES = (
-    (9, 4096),
-    (18, 2048),
-    (36, 1024),
-    (72, 512),
-)
-
-
-def estimate_bram18_sites(depth: int, width: int, banks: int = 1) -> int:
-    """Estimate RAMB18-equivalent sites using BRAM36 data-width modes."""
-
-    if depth <= 0 or width <= 0 or banks <= 0:
-        return 0
-    bram36_sites = min(
-        banks * math.ceil(depth / float(mode_depth)) * math.ceil(width / float(mode_width))
-        for mode_width, mode_depth in BRAM36_DATA_MODES
-    )
-    return int(bram36_sites * 2)
-
-
-def estimate_lutram64_sites(depth: int, width: int, banks: int = 1) -> int:
-    """Estimate LUTRAM64x1 primitives for a banked logical memory."""
-
-    if depth <= 0 or width <= 0 or banks <= 0:
-        return 0
-    return int(banks * math.ceil(depth / 64.0) * width)
-
-
 def estimate_fifo_bram18_sites(depth: int, width: int) -> int:
     """Estimate RAMB18-equivalent sites for an XPM FIFO memory shape."""
 
@@ -243,33 +215,6 @@ def choose_bram_to_lutram_relievers(
         if best_value <= 0:
             selected = []
 
-    selected = [dict(item) for item in selected]
-    selected.sort(key=lambda item: item["_order"])
-    for item in selected:
-        item.pop("_order", None)
-    return selected
-
-
-def choose_lutram_budget_relievers(
-    candidates: Iterable[Mapping],
-    max_lutram: int,
-) -> List[Dict]:
-    """Choose all useful LUTRAM candidates that fit in the LUTRAM budget.
-
-    This is for cases where the BRAM estimate is only a priority score, not a
-    reliable stopping condition. It maximizes the score under budget instead of
-    stopping as soon as a target is reached.
-    """
-
-    enriched = []
-    for idx, candidate in enumerate(candidates):
-        bram18 = int(candidate.get("bram18", 0) or 0)
-        lutram = int(candidate.get("lutram", 0) or 0)
-        if bram18 <= 0 or lutram <= 0 or lutram > max_lutram:
-            continue
-        enriched.append({**dict(candidate), "bram18": bram18, "lutram": lutram, "_order": idx})
-
-    selected = _choose_knapsack(enriched, max_lutram, "bram18", "lutram")
     selected = [dict(item) for item in selected]
     selected.sort(key=lambda item: item["_order"])
     for item in selected:

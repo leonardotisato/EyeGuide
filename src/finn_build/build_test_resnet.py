@@ -1,5 +1,5 @@
 """
-FINN Dataflow Build for QAT test_resnet -> Kria KV260 bitstream.
+FINN Dataflow Build for QAT test_resnet -> Alveo U250 artifact.
 
 Defaults to the current trim-160 fit experiment (`6w6a`), while still allowing
 explicit `--onnx` overrides such as `test_resnet_trim192_6w6a`.
@@ -18,7 +18,7 @@ import os
 import sys
 
 parser = argparse.ArgumentParser(
-    description="FINN dataflow build for QAT test_resnet -> Kria KV260."
+    description="FINN dataflow build for QAT test_resnet -> Alveo U250."
 )
 parser.add_argument("--onnx", default="models/test_resnet_trim160_6w6a.onnx")
 parser.add_argument("--output-dir", default=None,
@@ -34,8 +34,8 @@ parser.add_argument("--folding-config", default=None,
                     help="Manual folding config JSON. If None, uses target_fps auto-folding.")
 parser.add_argument("--manual-fifo-depths", action="store_true",
                     help="Use FIFO depths from --folding-config instead of auto FIFO sizing.")
-parser.add_argument("--board", default="KV260_SOM",
-                    help="Target board (default: KV260_SOM = xck26-sfvc784-2LV-c)")
+parser.add_argument("--board", default="U250",
+                    help="Target board (default: U250)")
 args = parser.parse_args()
 
 if args.manual_fifo_depths and args.folding_config is None:
@@ -57,7 +57,6 @@ try:
         step_test_resnet_streamline,
         step_test_resnet_lower,
         step_test_resnet_to_hw,
-        step_test_resnet_apply_threshold_lutram_config,
         step_test_resnet_apply_bram_relief_config,
     )
 except ImportError as e:
@@ -84,7 +83,6 @@ estimate_steps = [
     "step_create_dataflow_partition",
     "step_specialize_layers",
     "step_minimize_bit_width",
-    step_test_resnet_apply_threshold_lutram_config,
     "step_generate_estimate_reports",
 ]
 
@@ -125,7 +123,33 @@ if args.folding_config:
 else:
     estimate_steps.insert(minimize_idx, "step_target_fps_parallelization")
 
-full_steps = estimate_steps + [
+# ---------------------------------------------------------------------------
+# Board config
+# ---------------------------------------------------------------------------
+board = args.board
+supported_boards = {"Ultra96", "U250"}
+if board not in supported_boards:
+    print(f"\n[ERROR] Unsupported board for this test_resnet build: {board}")
+    print(f"  Supported boards: {sorted(supported_boards)}")
+    sys.exit(1)
+
+if board in pynq_part_map:
+    shell_flow_type = ShellFlowType.VIVADO_ZYNQ
+elif board in alveo_part_map:
+    shell_flow_type = ShellFlowType.VITIS_ALVEO
+else:
+    print(f"\n[ERROR] Unknown board: {board}")
+    print(f"  Valid Zynq boards: {list(pynq_part_map.keys())}")
+    print(f"  Valid Alveo boards: {list(alveo_part_map.keys())}")
+    sys.exit(1)
+
+if args.output_dir is None:
+    model_stem = os.path.splitext(os.path.basename(args.onnx))[0]
+    board_tag = board.lower().replace("-", "_")
+    args.output_dir = f"./build_finn_{model_stem}_{board_tag}"
+
+
+hardware_steps = [
     "step_hw_codegen",
     "step_hw_ipgen",
     "step_set_fifo_depths",
@@ -135,6 +159,8 @@ full_steps = estimate_steps + [
     "step_make_pynq_driver",
     "step_deployment_package",
 ]
+
+full_steps = estimate_steps + hardware_steps
 
 # ---------------------------------------------------------------------------
 # Select steps based on mode
@@ -151,26 +177,6 @@ if args.start_from or args.stop_after:
     start_lbl = args.start_from or step_names(selected_steps)[0]
     stop_lbl = args.stop_after or step_names(selected_steps)[-1]
     mode_label = f"Incremental ({start_lbl} -> {stop_lbl})"
-
-
-# ---------------------------------------------------------------------------
-# Board config
-# ---------------------------------------------------------------------------
-board = args.board
-if board in pynq_part_map:
-    shell_flow_type = ShellFlowType.VIVADO_ZYNQ
-elif board in alveo_part_map:
-    shell_flow_type = ShellFlowType.VITIS_ALVEO
-else:
-    print(f"\n[ERROR] Unknown board: {board}")
-    print(f"  Valid Zynq boards: {list(pynq_part_map.keys())}")
-    print(f"  Valid Alveo boards: {list(alveo_part_map.keys())}")
-    sys.exit(1)
-
-if args.output_dir is None:
-    model_stem = os.path.splitext(os.path.basename(args.onnx))[0]
-    board_tag = board.lower().replace("-", "_")
-    args.output_dir = f"./build_finn_{model_stem}_{board_tag}"
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +218,6 @@ else:
         DataflowOutputType.PYNQ_DRIVER,
         DataflowOutputType.DEPLOYMENT_PACKAGE,
     ]
-
 cfg = DataflowBuildConfig(
     steps=selected_steps,
     start_step=args.start_from,

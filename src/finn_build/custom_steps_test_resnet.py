@@ -40,23 +40,17 @@ try:
     from resource_policy import (
         choose_bram_to_lutram_relievers,
         choose_fifo_uram_relievers,
-        choose_lutram_budget_relievers,
-        estimate_bram18_sites,
         estimate_fifo_bram18_sites,
         estimate_fifo_lutram_luts,
         estimate_fifo_uram_sites,
-        estimate_lutram64_sites,
     )
 except ImportError:
     from src.finn_build.resource_policy import (
         choose_bram_to_lutram_relievers,
         choose_fifo_uram_relievers,
-        choose_lutram_budget_relievers,
-        estimate_bram18_sites,
         estimate_fifo_bram18_sites,
         estimate_fifo_lutram_luts,
         estimate_fifo_uram_sites,
-        estimate_lutram64_sites,
     )
 
 # --- Step: Streamlining ---
@@ -942,156 +936,17 @@ def _estimate_fifo_uram_sites(depth, width):
     return estimate_fifo_uram_sites(depth, width)
 
 
-def _dtype_bitwidth(dtype_name):
-    if dtype_name in ("", None):
-        return 0
-    try:
-        return int(DataType[str(dtype_name)].bitwidth())
-    except Exception:
-        return 0
-
-
-def _safe_threshold_shape(model, node):
-    try:
-        pe = int(_get_raw_nodeattr(node, "PE", 1) or 1)
-        channels = int(_get_raw_nodeattr(node, "NumChannels", 0) or 0)
-        steps = int(_get_raw_nodeattr(node, "numSteps", 0) or 0)
-    except Exception:
-        return (0, 0, 0)
-
-    if len(node.input) > 1:
-        threshold_shape = model.get_tensor_shape(node.input[1]) or []
-        if channels <= 0 and len(threshold_shape) > 0:
-            channels = int(threshold_shape[0])
-        if steps <= 0 and len(threshold_shape) > 1:
-            steps = int(threshold_shape[-1])
-
-    bitwidth = _dtype_bitwidth(_get_raw_nodeattr(node, "thresholdDataType", ""))
-    if bitwidth <= 0:
-        bitwidth = _dtype_bitwidth(_get_raw_nodeattr(node, "inputDataType", ""))
-    if bitwidth <= 0 and len(node.input) > 1:
-        try:
-            bitwidth = int(model.get_tensor_datatype(node.input[1]).bitwidth())
-        except Exception:
-            bitwidth = 0
-    if bitwidth <= 0:
-        bitwidth = 16
-
-    if pe <= 0 or channels <= 0 or steps <= 0:
-        return (0, 0, 0)
-
-    banks = pe
-    depth = int(math.ceil(channels / float(pe)))
-    width = int(steps * bitwidth)
-    return (banks, depth, width)
-
-
-def step_test_resnet_apply_threshold_lutram_config(
-    model: ModelWrapper, cfg: DataflowBuildConfig
-) -> ModelWrapper:
-    """Move selected KV260 Thresholding memories from BRAM to LUTRAM pre-codegen."""
-
-    board = getattr(cfg, "board", None)
-    if board != "KV260_SOM":
-        print(f"  Thresholding LUTRAM relief: skipped for board={board}")
-        return model
-
-    max_added_lutram_luts = 9000
-    min_bram18_sites = 2
-    threshold_candidates = []
-    skipped_threshold_shape = 0
-    skipped_threshold_too_shallow = 0
-    skipped_threshold_small = 0
-
-    for idx, node in enumerate(model.graph.node):
-        if node.op_type != "Thresholding_rtl":
-            continue
-
-        banks, depth, width = _safe_threshold_shape(model, node)
-        if banks <= 0 or depth <= 0 or width <= 0:
-            skipped_threshold_shape += 1
-            continue
-        if depth < 64:
-            skipped_threshold_too_shallow += 1
-            continue
-
-        bram18_sites = estimate_bram18_sites(depth, width, banks)
-        lutram_luts = estimate_lutram64_sites(depth, width, banks)
-        if bram18_sites < min_bram18_sites:
-            skipped_threshold_small += 1
-            continue
-
-        threshold_candidates.append(
-            {
-                "idx": idx,
-                "node": node,
-                "name": node.name,
-                "banks": banks,
-                "depth": depth,
-                "width": width,
-                "bram18": bram18_sites,
-                "lutram": lutram_luts,
-            }
-        )
-
-    threshold_selected = choose_lutram_budget_relievers(
-        threshold_candidates,
-        max_lutram=max_added_lutram_luts,
-    )
-    for cand in threshold_selected:
-        _set_raw_nodeattr(cand["node"], "ram_style", "distributed")
-        _set_raw_nodeattr(cand["node"], "depth_trigger_bram", cand["depth"] + 1)
-
-    if threshold_selected:
-        selected_desc = ", ".join(
-            [
-                "%s:bram_score~%d:lutram~%d:banks=%d:depth=%d:width=%d:idx=%d"
-                % (
-                    cand["name"],
-                    cand["bram18"],
-                    cand["lutram"],
-                    cand["banks"],
-                    cand["depth"],
-                    cand["width"],
-                    cand["idx"],
-                )
-                for cand in threshold_selected
-            ]
-        )
-        print(
-            f"  Thresholding LUTRAM relief applied for {board}: "
-            f"nodes={len(threshold_selected)}, "
-            f"bram_score~{sum(cand['bram18'] for cand in threshold_selected)}, "
-            f"added_lutram~{sum(cand['lutram'] for cand in threshold_selected)}, "
-            f"max_added_lutram={max_added_lutram_luts}, "
-            f"skipped_no_shape={skipped_threshold_shape}, "
-            f"skipped_too_shallow={skipped_threshold_too_shallow}, "
-            f"skipped_too_small={skipped_threshold_small}, "
-            f"selected=[{selected_desc}]"
-        )
-    else:
-        print(
-            f"  Thresholding LUTRAM relief for {board}: no eligible nodes updated "
-            f"(max_added_lutram={max_added_lutram_luts}, "
-            f"skipped_no_shape={skipped_threshold_shape}, "
-            f"skipped_too_shallow={skipped_threshold_too_shallow}, "
-            f"skipped_too_small={skipped_threshold_small})"
-        )
-
-    return cleanup_model(model)
-
-
 def step_test_resnet_apply_bram_relief_config(
     model: ModelWrapper, cfg: DataflowBuildConfig
 ) -> ModelWrapper:
     """Move selected FIFO memories away from scarce BRAM.
 
-    The trim-160 builds are close to fitting on both Ultra96 and KV260 but can
-    fail final Vivado DRC due to BRAM and SLICEM pressure. This pass runs after
-    FIFO depth sizing and applies structural rules:
+    The trim-160 builds are close to fitting on smaller boards but can fail
+    final Vivado DRC due to BRAM and SLICEM pressure. This pass runs after FIFO
+    depth sizing and applies board-specific structural rules:
 
-    1. KV260 deep FIFOs -> URAM first;
-    2. remaining short/medium Vivado FIFOs -> LUTRAM within a tighter budget.
+    1. deep FIFOs -> URAM where the target has enough URAM;
+    2. optional short/medium Vivado FIFOs -> LUTRAM on BRAM-limited Zynq flows.
 
     Selection intentionally uses depth/width/resource estimates instead of
     post-synthesis instance names, since FINN/Vivado may renumber nodes during
@@ -1105,13 +960,13 @@ def step_test_resnet_apply_bram_relief_config(
             "fifo_lutram_max_depth": 4096,
             "fifo_lutram_budget": 8000,
         },
-        "KV260_SOM": {
-            "fifo_uram_total_budget": 60,
-            "fifo_uram_forced_min_depth": 8192,
-            "fifo_uram_min_slicem_per_uram": 128,
-            "fifo_lutram_target_bram18_sites": 24,
-            "fifo_lutram_max_depth": 4096,
-            "fifo_lutram_budget": 3500,
+        "U250": {
+            "fifo_uram_total_budget": 256,
+            "fifo_uram_forced_min_depth": 4096,
+            "fifo_uram_min_slicem_per_uram": 0,
+            "fifo_lutram_target_bram18_sites": 0,
+            "fifo_lutram_max_depth": 0,
+            "fifo_lutram_budget": 0,
         },
     }
     if board not in board_settings:
@@ -1224,6 +1079,19 @@ def step_test_resnet_apply_bram_relief_config(
     target_bram18_sites = settings["fifo_lutram_target_bram18_sites"]
     max_fifo_depth = settings["fifo_lutram_max_depth"]
     max_added_lutram_luts = settings["fifo_lutram_budget"]
+    if (
+        target_bram18_sites <= 0
+        or max_fifo_depth <= 0
+        or max_added_lutram_luts <= 0
+    ):
+        print(
+            f"  FIFO LUTRAM relief: skipped for {board} "
+            f"(target_bram18={target_bram18_sites}, "
+            f"max_fifo_depth={max_fifo_depth}, "
+            f"max_added_lutram={max_added_lutram_luts})"
+        )
+        return cleanup_model(model)
+
     candidates = []
     skipped_non_vivado = 0
     skipped_depth_monitor = 0
