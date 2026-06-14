@@ -133,12 +133,16 @@ if board not in supported_boards:
     print(f"  Supported boards: {sorted(supported_boards)}")
     sys.exit(1)
 
-if board in pynq_part_map:
+platform_board = board
+if board == "U250":
+    platform_board = "xilinx_u250_gen3x16_xdma_4_1_202210_1"
+
+if platform_board in pynq_part_map:
     shell_flow_type = ShellFlowType.VIVADO_ZYNQ
-elif board in alveo_part_map:
+elif platform_board in alveo_part_map:
     shell_flow_type = ShellFlowType.VITIS_ALVEO
 else:
-    print(f"\n[ERROR] Unknown board: {board}")
+    print(f"\n[ERROR] Unknown board/platform: {platform_board}")
     print(f"  Valid Zynq boards: {list(pynq_part_map.keys())}")
     print(f"  Valid Alveo boards: {list(alveo_part_map.keys())}")
     sys.exit(1)
@@ -188,8 +192,8 @@ print(f"{'=' * 60}")
 print(f"  Mode:    {mode_label}")
 print(f"  Steps:   {len(selected_steps)}")
 print(f"  Model:   {args.onnx}")
-part = pynq_part_map.get(board) or alveo_part_map.get(board, "N/A")
-print(f"  Board:   {board} ({part})")
+part = pynq_part_map.get(platform_board) or alveo_part_map.get(platform_board, "N/A")
+print(f"  Board:   {board} -> {platform_board} ({part})")
 print(f"  Flow:    {shell_flow_type}")
 print(f"  Clock:   {args.synth_clk_ns} ns ({1000/args.synth_clk_ns:.0f} MHz)")
 print(f"  Target:  {args.target_fps} FPS")
@@ -224,7 +228,7 @@ cfg = DataflowBuildConfig(
     stop_step=args.stop_after,
     output_dir=args.output_dir,
     synth_clk_period_ns=args.synth_clk_ns,
-    board=board,
+    board=platform_board,
     shell_flow_type=shell_flow_type,
     target_fps=args.target_fps,
     folding_config_file=args.folding_config,
