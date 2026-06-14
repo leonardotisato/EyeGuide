@@ -43,6 +43,8 @@ if args.manual_fifo_depths and args.folding_config is None:
     sys.exit(1)
 
 try:
+    import finn.util.basic as finn_basic
+
     from finn.builder.build_dataflow_config import (
         DataflowBuildConfig,
         DataflowOutputType,
@@ -126,6 +128,20 @@ else:
 # ---------------------------------------------------------------------------
 # Board config
 # ---------------------------------------------------------------------------
+U250_INSTALLED_PLATFORM = "xilinx_u250_gen3x16_xdma_4_1_202210_1"
+U250_FINN_DEFAULT_PLATFORM = "xilinx_u250_gen3x16_xdma_2_1_202010_1"
+
+
+def patch_u250_vitis_platform():
+    """Patch FINN's U250 Vitis platform alias without touching HLS set_part."""
+    patched = []
+    for name, value in vars(finn_basic).items():
+        if isinstance(value, dict) and value.get("U250") == U250_FINN_DEFAULT_PLATFORM:
+            value["U250"] = U250_INSTALLED_PLATFORM
+            patched.append(name)
+    return patched
+
+
 board = args.board
 supported_boards = {"Ultra96", "U250"}
 if board not in supported_boards:
@@ -133,9 +149,7 @@ if board not in supported_boards:
     print(f"  Supported boards: {sorted(supported_boards)}")
     sys.exit(1)
 
-
-if board == "U250":
-    alveo_part_map[board] = "xilinx_u250_gen3x16_xdma_4_1_202210_1"
+patched_platform_maps = patch_u250_vitis_platform() if board == "U250" else []
 
 if board in pynq_part_map:
     shell_flow_type = ShellFlowType.VIVADO_ZYNQ
@@ -195,6 +209,8 @@ print(f"  Model:   {args.onnx}")
 part = pynq_part_map.get(board) or alveo_part_map.get(board, "N/A")
 print(f"  Board:   {board} ({part})")
 print(f"  Flow:    {shell_flow_type}")
+if patched_platform_maps:
+    print(f"  Platform:{U250_INSTALLED_PLATFORM} (patched {patched_platform_maps})")
 print(f"  Clock:   {args.synth_clk_ns} ns ({1000/args.synth_clk_ns:.0f} MHz)")
 print(f"  Target:  {args.target_fps} FPS")
 if args.folding_config:
