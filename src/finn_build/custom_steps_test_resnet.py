@@ -957,7 +957,7 @@ def step_test_resnet_apply_bram_relief_config(
     board_settings = {
         "Ultra96": {
             "fifo_lutram_target_bram18_sites": 31,
-            "fifo_lutram_max_depth": 4096,
+            "fifo_lutram_max_depth": 2048,
             "fifo_lutram_budget": 8000,
         },
         "U250": {
