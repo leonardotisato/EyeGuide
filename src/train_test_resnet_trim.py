@@ -33,7 +33,12 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(__file__))
 from utils.dataset import prepare_dataframes, safe_pil_read, trim_fundus_black_border
 from utils.generals import progress_bar
-from utils.model import ResNet18Classifier
+from utils.kd_sweep import (
+    build_teacher_model,
+    resolve_experiment_paths,
+    resolve_teacher_spec,
+    resolve_trim_fp32_run,
+)
 from utils.seed import set_seeds
 from utils.training import test
 from utils.transforms import make_strong_train_transform, make_test_transform
@@ -50,20 +55,6 @@ PATIENCE = 50
 MODEL_NAME = "test_resnet.r160_in1k"
 KD_TEMPERATURE = 3.0
 KD_ALPHA = 0.25
-
-
-def resolve_trim_fp32_run(student_resolution: int):
-    """Resolve stable names for one trimmed-input FP32 run."""
-
-    run_tag = f"trim{student_resolution}"
-    return {
-        "run_tag": run_tag,
-        "checkpoint_name": f"test_resnet_fp32_kd_{run_tag}_ft.pth",
-        "results_dir_name": f"test_resnet_{run_tag}",
-        "report_name": f"train_test_resnet_{run_tag}_report.json",
-        "log_name": f"train_test_resnet_{run_tag}_log.csv",
-        "model_type": f"test_resnet_fp32_kd_{run_tag}_ft",
-    }
 
 
 class DualResTrimDataset(Dataset):
@@ -197,13 +188,20 @@ def main(cfg: DictConfig) -> None:
     print(f"Device: {device}")
 
     student_resolution = int(OmegaConf.select(cfg, "student_resolution", default=192))
+    paths = resolve_experiment_paths(cfg)
+    teacher_spec = resolve_teacher_spec(cfg, paths)
     student_test_transform = make_test_transform(student_resolution)
     student_train_transform = make_strong_train_transform(student_resolution)
-    run_cfg = resolve_trim_fp32_run(student_resolution)
+    run_cfg = resolve_trim_fp32_run(
+        student_resolution=student_resolution,
+        teacher_mode=teacher_spec["mode"],
+        seed=int(cfg.RANDOM_SEED),
+        experiment_tag=paths.experiment_tag,
+    )
 
-    results_dir = os.path.join(cfg.results_dir, run_cfg["results_dir_name"])
+    results_dir = os.path.join(paths.results_root, run_cfg["results_dir_name"])
     os.makedirs(results_dir, exist_ok=True)
-    os.makedirs(cfg.models_dir, exist_ok=True)
+    os.makedirs(paths.models_dir, exist_ok=True)
 
     train_df, val_df, test_df = prepare_dataframes(cfg)
 
@@ -237,13 +235,14 @@ def main(cfg: DictConfig) -> None:
         test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True
     )
 
-    teacher_path = os.path.join(cfg.models_dir, "resnet18_from_resnet50_fp32_kd.pth")
+    teacher_path = teacher_spec["checkpoint_path"]
     if not os.path.exists(teacher_path):
         print(f"[ERROR] Teacher checkpoint not found: {teacher_path}")
         return
 
+    print(f"Teacher mode: {teacher_spec['mode']} ({teacher_spec['description']})")
     print(f"Loading teacher from: {teacher_path}")
-    teacher = ResNet18Classifier(nr_classes=cfg.nr_classes, pretrained=False)
+    teacher = build_teacher_model(teacher_spec["arch"], cfg.nr_classes)
     teacher.load_state_dict(torch.load(teacher_path, map_location="cpu"))
     teacher.to(device)
     teacher.eval()
@@ -261,7 +260,7 @@ def main(cfg: DictConfig) -> None:
     print(f"Training: {EPOCHS} epochs, LR={LR}, patience={PATIENCE}")
     print(
         f"Configuration: trim black border -> {student_resolution} student, "
-        "KD teacher remains full-image 512."
+        f"{teacher_spec['mode']} KD teacher remains full-image 512."
     )
 
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
@@ -343,7 +342,7 @@ def main(cfg: DictConfig) -> None:
         )
     model.to(device)
 
-    ckpt_path = os.path.join(cfg.models_dir, run_cfg["checkpoint_name"])
+    ckpt_path = os.path.join(paths.models_dir, run_cfg["checkpoint_name"])
     torch.save(model.state_dict(), ckpt_path)
     print(f"Checkpoint saved -> {ckpt_path}")
 
@@ -369,7 +368,12 @@ def main(cfg: DictConfig) -> None:
         "checkpoint": ckpt_path,
         "student_init": "imagenet",
         "init_checkpoint": None,
-        "teacher": "resnet18_from_resnet50_fp32_kd.pth (512x512 full-image strong train / test eval)",
+        "teacher_mode": teacher_spec["mode"],
+        "teacher_arch": teacher_spec["arch"],
+        "teacher_checkpoint": teacher_path,
+        "teacher": f"{teacher_spec['checkpoint_name']} (512x512 full-image strong train / test eval)",
+        "experiment_tag": paths.experiment_tag,
+        "random_seed": int(cfg.RANDOM_SEED),
         "student_resolution": student_resolution,
         "teacher_resolution": 512,
         "student_preprocess": {

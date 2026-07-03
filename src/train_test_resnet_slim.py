@@ -36,14 +36,19 @@ from train_test_resnet_trim import (  # noqa: E402
     validate,
 )
 from utils.dataset import FundusClsDataset, prepare_dataframes, trim_fundus_black_border  # noqa: E402
-from utils.model import ResNet18Classifier  # noqa: E402
+from utils.kd_sweep import (  # noqa: E402
+    build_teacher_model,
+    resolve_experiment_paths,
+    resolve_slim_fp32_run,
+    resolve_teacher_spec,
+    resolve_trim_fp32_run,
+)
 from utils.seed import set_seeds  # noqa: E402
 from utils.test_resnet_slim import (  # noqa: E402
     DEFAULT_LAYER3_OUT,
     DEFAULT_LAYER4_OUT,
     TestResNetSlim,
     load_test_resnet_slim_weights,
-    slim_variant_tag,
 )
 from utils.training import test  # noqa: E402
 from utils.transforms import make_strong_train_transform, make_test_transform  # noqa: E402
@@ -53,32 +58,30 @@ DEFAULT_STUDENT_RESOLUTION = 160
 DEFAULT_FP32_ARTIFACT = "test_resnet_slim128x64_fp32_kd_trim160_ft.pth"
 
 
-def resolve_slim_fp32_run(
-    student_resolution: int,
-    layer3_out: int = DEFAULT_LAYER3_OUT,
-    layer4_out: int = DEFAULT_LAYER4_OUT,
-):
-    trim_tag = f"trim{student_resolution}"
-    variant = slim_variant_tag(layer3_out, layer4_out)
-    run_tag = f"{variant}_{trim_tag}"
-    return {
-        "variant": variant,
-        "trim_tag": trim_tag,
-        "run_tag": run_tag,
-        "checkpoint_name": f"test_resnet_{variant}_fp32_kd_{trim_tag}_ft.pth",
-        "results_dir_name": f"test_resnet_{run_tag}",
-        "report_name": f"train_test_resnet_{run_tag}_report.json",
-        "log_name": f"train_test_resnet_{run_tag}_log.csv",
-        "model_type": f"test_resnet_{variant}_fp32_kd_{trim_tag}_ft",
-    }
-
-
-def resolve_student_init_state(cfg, run_cfg, student_resolution):
+def resolve_student_init_state(cfg, run_cfg, student_resolution, paths, teacher_spec):
     warm_start = OmegaConf.select(cfg, "warm_start_checkpoint", default=None)
     if warm_start is not None:
         if not os.path.exists(warm_start):
             raise FileNotFoundError(f"warm_start_checkpoint not found: {warm_start}")
         return torch.load(warm_start, map_location="cpu"), warm_start, "warm_start_checkpoint"
+
+    if paths.experiment_tag is not None:
+        matching_trim_run = resolve_trim_fp32_run(
+            student_resolution=student_resolution,
+            teacher_mode=teacher_spec["mode"],
+            seed=int(cfg.RANDOM_SEED),
+            experiment_tag=paths.experiment_tag,
+        )
+        matching_trim_checkpoint = os.path.join(
+            paths.models_dir,
+            matching_trim_run["checkpoint_name"],
+        )
+        if os.path.exists(matching_trim_checkpoint):
+            return (
+                torch.load(matching_trim_checkpoint, map_location="cpu"),
+                matching_trim_checkpoint,
+                "matching_trim_fp32_checkpoint",
+            )
 
     trim_checkpoint = os.path.join(
         cfg.models_dir,
@@ -107,13 +110,22 @@ def main(cfg: DictConfig) -> None:
     )
     layer3_out = int(OmegaConf.select(cfg, "slim_layer3_out", default=DEFAULT_LAYER3_OUT))
     layer4_out = int(OmegaConf.select(cfg, "slim_layer4_out", default=DEFAULT_LAYER4_OUT))
+    paths = resolve_experiment_paths(cfg)
+    teacher_spec = resolve_teacher_spec(cfg, paths)
     student_test_transform = make_test_transform(student_resolution)
     student_train_transform = make_strong_train_transform(student_resolution)
-    run_cfg = resolve_slim_fp32_run(student_resolution, layer3_out, layer4_out)
+    run_cfg = resolve_slim_fp32_run(
+        student_resolution=student_resolution,
+        layer3_out=layer3_out,
+        layer4_out=layer4_out,
+        teacher_mode=teacher_spec["mode"],
+        seed=int(cfg.RANDOM_SEED),
+        experiment_tag=paths.experiment_tag,
+    )
 
-    results_dir = os.path.join(cfg.results_dir, run_cfg["results_dir_name"])
+    results_dir = os.path.join(paths.results_root, run_cfg["results_dir_name"])
     os.makedirs(results_dir, exist_ok=True)
-    os.makedirs(cfg.models_dir, exist_ok=True)
+    os.makedirs(paths.models_dir, exist_ok=True)
 
     train_df, val_df, test_df = prepare_dataframes(cfg)
 
@@ -144,12 +156,14 @@ def main(cfg: DictConfig) -> None:
         test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=4, pin_memory=True
     )
 
-    teacher_path = os.path.join(cfg.models_dir, "resnet18_from_resnet50_fp32_kd.pth")
+    teacher_path = teacher_spec["checkpoint_path"]
     if not os.path.exists(teacher_path):
         print(f"[ERROR] Teacher checkpoint not found: {teacher_path}")
         return
 
-    teacher = ResNet18Classifier(nr_classes=cfg.nr_classes, pretrained=False)
+    print(f"Teacher mode: {teacher_spec['mode']} ({teacher_spec['description']})")
+    print(f"Loading teacher from: {teacher_path}")
+    teacher = build_teacher_model(teacher_spec["arch"], cfg.nr_classes)
     teacher.load_state_dict(torch.load(teacher_path, map_location="cpu"))
     teacher.to(device)
     teacher.eval()
@@ -165,7 +179,7 @@ def main(cfg: DictConfig) -> None:
         layer4_out=layer4_out,
     )
     init_state, init_source, init_mode = resolve_student_init_state(
-        cfg, run_cfg, student_resolution
+        cfg, run_cfg, student_resolution, paths, teacher_spec
     )
     _, _, load_report = load_test_resnet_slim_weights(model, init_state)
     print(f"Init source: {init_source} ({init_mode})")
@@ -181,7 +195,8 @@ def main(cfg: DictConfig) -> None:
     print(f"Training: {EPOCHS} epochs, LR={LR}, patience={PATIENCE}")
     print(
         f"Configuration: trim black border -> {student_resolution} student, "
-        f"channels layer3={layer3_out}, layer4={layer4_out}."
+        f"channels layer3={layer3_out}, layer4={layer4_out}, "
+        f"teacher={teacher_spec['mode']}."
     )
 
     optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
@@ -244,7 +259,7 @@ def main(cfg: DictConfig) -> None:
         )
     model.to(device)
 
-    ckpt_path = os.path.join(cfg.models_dir, run_cfg["checkpoint_name"])
+    ckpt_path = os.path.join(paths.models_dir, run_cfg["checkpoint_name"])
     torch.save(model.state_dict(), ckpt_path)
     print(f"Checkpoint saved -> {ckpt_path}")
 
@@ -274,7 +289,12 @@ def main(cfg: DictConfig) -> None:
         "student_init": init_mode,
         "init_checkpoint": init_source,
         "weight_transfer": load_report,
-        "teacher": "resnet18_from_resnet50_fp32_kd.pth (512x512 full-image strong train / test eval)",
+        "teacher_mode": teacher_spec["mode"],
+        "teacher_arch": teacher_spec["arch"],
+        "teacher_checkpoint": teacher_path,
+        "teacher": f"{teacher_spec['checkpoint_name']} (512x512 full-image strong train / test eval)",
+        "experiment_tag": paths.experiment_tag,
+        "random_seed": int(cfg.RANDOM_SEED),
         "student_resolution": student_resolution,
         "teacher_resolution": 512,
         "input_size": [1, 3, student_resolution, student_resolution],
