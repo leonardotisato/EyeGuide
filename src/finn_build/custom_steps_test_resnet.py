@@ -961,7 +961,7 @@ def step_test_resnet_apply_bram_relief_config(
             "fifo_lutram_budget": 8000,
         },
         "U250": {
-            "fifo_uram_total_budget": 256,
+            "fifo_uram_total_budget": 1024,
             "fifo_uram_forced_min_depth": 4096,
             "fifo_uram_min_slicem_per_uram": 0,
             "fifo_lutram_target_bram18_sites": 0,

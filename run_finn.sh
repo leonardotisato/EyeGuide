@@ -11,6 +11,10 @@ CANDIDATES=()
 export FINN_XILINX_PATH="${FINN_XILINX_PATH:-/home/xilinx}"
 export FINN_XILINX_VERSION="${FINN_XILINX_VERSION:-2024.2}"
 export FINN_TCLLIBPATH="${FINN_TCLLIBPATH:-/home/xilinx/Vivado/2024.2/data/XilinxTclStore/tclapp}"
+export TCLLIBPATH="${TCLLIBPATH:-/home/xilinx/Vivado/2024.2/data/XilinxTclStore/tclapp}"
+export VITIS_PATH="${VITIS_PATH:-/home/xilinx/Vitis/2024.2}"
+export XILINX_XRT="${XILINX_XRT:-/opt/xilinx/xrt}"
+export PLATFORM_REPO_PATHS="${PLATFORM_REPO_PATHS:-/opt/xilinx/platforms}"
 
 if [ -n "${HPPS_FINN_ROOT:-}" ]; then
   CANDIDATES+=("$HPPS_FINN_ROOT")
@@ -60,3 +64,5 @@ if [ $# -eq 0 ]; then
 else
   exec "$FINN_RUN_DOCKER" "$@"
 fi
+
+export TCLLIBPATH="${TCLLIBPATH:-/home/xilinx/Vivado/2024.2/data/XilinxTclStore/tclapp}"

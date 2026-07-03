@@ -14,8 +14,13 @@ Must run inside the FINN Docker container.
 """
 
 import argparse
+import glob
+import getpass
 import os
+import shutil
 import sys
+import time
+from pathlib import Path
 
 parser = argparse.ArgumentParser(
     description="FINN dataflow build for QAT test_resnet -> Alveo U250."
@@ -49,6 +54,7 @@ try:
         DataflowBuildConfig,
         DataflowOutputType,
         ShellFlowType,
+        VitisOptStrategyCfg,
     )
     from finn.builder.build_dataflow import build_dataflow_cfg
     from finn.util.basic import pynq_part_map, alveo_part_map
@@ -130,6 +136,12 @@ else:
 # ---------------------------------------------------------------------------
 U250_INSTALLED_PLATFORM = "xilinx_u250_gen3x16_xdma_4_1_202210_1"
 U250_FINN_DEFAULT_PLATFORM = "xilinx_u250_gen3x16_xdma_2_1_202010_1"
+BOARD_MVAU_WWIDTH_MAX = {
+    "U250": 10000,
+}
+BOARD_VITIS_OPT_STRATEGY = {
+    "U250": VitisOptStrategyCfg.PERFORMANCE_BEST,
+}
 
 
 def patch_u250_vitis_platform():
@@ -142,6 +154,76 @@ def patch_u250_vitis_platform():
     return patched
 
 
+def _vitis_link_projects():
+    tmp_root = Path("/tmp") / f"finn_dev_{getpass.getuser()}"
+    return {Path(p) for p in glob.glob(str(tmp_root / "vitis_link_proj_*"))}
+
+
+def _copy_vitis_reports(output_dir, before_projects, build_start_time):
+    """Copy useful Vitis-Alveo link reports from /tmp into the build report dir."""
+    after_projects = _vitis_link_projects()
+    candidates = list(after_projects - before_projects)
+    if not candidates:
+        candidates = [
+            p for p in after_projects
+            if p.stat().st_mtime >= build_start_time - 60
+        ]
+    if not candidates:
+        print("  Vitis report copy: no vitis_link_proj_* directory found")
+        return
+
+    vitis_proj = max(candidates, key=lambda p: p.stat().st_mtime)
+    impl_dir = vitis_proj / "_x/link/vivado/vpl/prj/prj.runs/impl_1"
+    if not impl_dir.is_dir():
+        print(f"  Vitis report copy: implementation report dir not found under {vitis_proj}")
+        return
+
+    report_dir = Path(output_dir) / "report" / "vitis_alveo"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    report_names = [
+        "full_util_synthed.rpt",
+        "full_util_placed.rpt",
+        "full_util_routed.rpt",
+        "kernel_util_synthed.rpt",
+        "kernel_util_placed.rpt",
+        "kernel_util_routed.rpt",
+        "slr_util_placed.rpt",
+        "slr_util_routed.rpt",
+        "hw_bb_locked_timing_summary_init.rpt",
+        "hw_bb_locked_timing_summary_placed.rpt",
+        "hw_bb_locked_timing_summary_routed.rpt",
+        "dr_timing_summary.rpt",
+    ]
+
+    copied = []
+    for name in report_names:
+        src = impl_dir / name
+        if src.is_file():
+            shutil.copy2(src, report_dir / name)
+            copied.append(name)
+
+    for log_name in ["v++_a.log", "run_vitis_link.sh", "config.txt"]:
+        src = vitis_proj / log_name
+        if src.is_file():
+            shutil.copy2(src, report_dir / log_name)
+            copied.append(log_name)
+
+    manifest = report_dir / "source.txt"
+    manifest.write_text(
+        "Vitis-Alveo reports copied from:\n"
+        f"{vitis_proj}\n\n"
+        "Key files:\n"
+        "- full_util_routed.rpt: full linked Alveo design, including shell/platform\n"
+        "- kernel_util_routed.rpt: user kernel region\n"
+        "- slr_util_routed.rpt: resource distribution by SLR\n"
+        "- hw_bb_locked_timing_summary_routed.rpt: routed timing summary\n"
+        "- dr_timing_summary.rpt: dynamic region timing summary\n",
+        encoding="utf-8",
+    )
+    print(f"  Vitis reports copied to {report_dir} ({len(copied)} files)")
+
+
 board = args.board
 supported_boards = {"Ultra96", "U250"}
 if board not in supported_boards:
@@ -150,6 +232,8 @@ if board not in supported_boards:
     sys.exit(1)
 
 patched_platform_maps = patch_u250_vitis_platform() if board == "U250" else []
+mvau_wwidth_max = BOARD_MVAU_WWIDTH_MAX.get(board, 36)
+vitis_opt_strategy = BOARD_VITIS_OPT_STRATEGY.get(board, VitisOptStrategyCfg.DEFAULT)
 
 if board in pynq_part_map:
     shell_flow_type = ShellFlowType.VIVADO_ZYNQ
@@ -211,8 +295,12 @@ print(f"  Board:   {board} ({part})")
 print(f"  Flow:    {shell_flow_type}")
 if patched_platform_maps:
     print(f"  Platform:{U250_INSTALLED_PLATFORM} (patched {patched_platform_maps})")
+if shell_flow_type == ShellFlowType.VITIS_ALVEO:
+    print(f"  Vitis:   optimization strategy {vitis_opt_strategy.value}")
 print(f"  Clock:   {args.synth_clk_ns} ns ({1000/args.synth_clk_ns:.0f} MHz)")
 print(f"  Target:  {args.target_fps} FPS")
+print(f"  MVAU W:  max weight stream width {mvau_wwidth_max}")
+print("  Folding: two-pass relaxation False")
 if args.folding_config:
     print(f"  Folding: {args.folding_config}")
 else:
@@ -247,6 +335,9 @@ cfg = DataflowBuildConfig(
     board=board,
     shell_flow_type=shell_flow_type,
     target_fps=args.target_fps,
+    mvau_wwidth_max=mvau_wwidth_max,
+    folding_two_pass_relaxation=False,
+    vitis_opt_strategy=vitis_opt_strategy,
     folding_config_file=args.folding_config,
     auto_fifo_depths=not args.manual_fifo_depths,
     generate_outputs=generate_outputs,
@@ -255,7 +346,12 @@ cfg = DataflowBuildConfig(
     default_swg_exception=True,
 )
 
+vitis_projects_before = _vitis_link_projects()
+build_start_time = time.time()
 build_dataflow_cfg(args.onnx, cfg)
+
+if shell_flow_type == ShellFlowType.VITIS_ALVEO and not args.estimates_only and not args.stop_after:
+    _copy_vitis_reports(args.output_dir, vitis_projects_before, build_start_time)
 
 print(f"\n{'=' * 60}")
 print(f"  Build complete!")
